@@ -1,5 +1,8 @@
 bin/
 obj/
 
+#Visual Studio files
+.vs/
 *.sln
 *.vcxproj
+*.vcxproj.user

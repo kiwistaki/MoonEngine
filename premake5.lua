@@ -12,7 +12,7 @@ LibraryDir = {}
 LibraryDir["Assimp"] = "../Libs/Assimp/lib/assimp-vc140-mt.lib"
 
 project "Moon"
-	location "Engine"
+	location "Moon"
 	kind "ConsoleApp"
 	language "C++"
 	cppdialect "C++17"
