@@ -8,3 +8,6 @@
 	path = Libs/imgui
 	url = https://github.com/kiwistaki/imgui
 	branch = docking
+[submodule "Libs/stb"]
+	path = Libs/stb
+	url = https://github.com/nothings/stb.git
