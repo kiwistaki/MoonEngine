@@ -82,7 +82,10 @@ namespace Moon
 		void cleanup();
 		void draw();
 		void drawMain(VkCommandBuffer cmd);
+		void drawImgui(VkCommandBuffer cmd, VkImageView targetImageView);
 		void run();
+
+		void immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function);
 
 	private:
 		void initVulkan();
@@ -91,44 +94,54 @@ namespace Moon
 		void initSyncStructures();
 		void initDescriptors();
 		void initPipelines();
+		void initRayTracing();
+		void initImgui();
 
 		FrameData& getCurrentFrame();
 
 		bool loadShaderModule(const char* filePath, VkShaderModule* shaderModule);
 
 	private:
-		bool _isInitialized{ false };
-		int _frameNumber{ 0 };
+		bool m_isInitialized{ false };
+		int m_frameNumber{ 0 };
 
-		VkExtent2D _windowExtent{ SCREEN_WIDTH , SCREEN_HEIGHT };
-		SDL_Window* _window{ nullptr };
+		VkExtent2D m_windowExtent{ SCREEN_WIDTH , SCREEN_HEIGHT };
+		SDL_Window* m_window{ nullptr };
 
 		// Basic Vulkan
-		VkInstance _instance;
-		VkDebugUtilsMessengerEXT _debug_messenger;
-		VkPhysicalDevice _chosenGPU;
-		VkDevice _device;
-		VkSurfaceKHR _surface;
-		VkQueue _graphicsQueue;
-		uint32_t _graphicsQueueFamily;
-		VmaAllocator _allocator;
-		FrameData _frames[FRAME_OVERLAP];
-		DeletionQueue _mainDeletionQueue;
+		VkInstance m_instance;
+		VkDebugUtilsMessengerEXT m_debugMessenger;
+		VkPhysicalDevice m_physicalDevice;
+		VkDevice m_device;
+		VkSurfaceKHR m_surface;
+		VkQueue m_graphicsQueue;
+		uint32_t m_graphicsQueueFamily;
+		VmaAllocator m_allocator;
+		FrameData m_frames[FRAME_OVERLAP];
+		DeletionQueue m_mainDeletionQueue;
 
 		// Swapchain
-		VkSwapchainKHR _swapchain;
-		VkFormat _swapchainImageFormat;
-		std::vector<VkImage> _swapchainImages;
-		std::vector<VkImageView> _swapchainImageViews;
+		VkSwapchainKHR m_swapchain;
+		VkFormat m_swapchainImageFormat;
+		std::vector<VkImage> m_swapchainImages;
+		std::vector<VkImageView> m_swapchainImageViews;
 
-		DescriptorAllocator globalDescriptorAllocator;
-		VkDescriptorSetLayout _drawImageDescriptorLayout;
-		VkDescriptorSet _drawImageDescriptorSet;
+		DescriptorAllocator m_globalDescriptorAllocator;
+		VkDescriptorSetLayout m_drawImageDescriptorLayout;
+		VkDescriptorSet m_drawImageDescriptorSet;
+
+		// Immediate Submit structures
+		VkFence m_immFence;
+		VkCommandBuffer m_immCommandBuffer;
+		VkCommandPool m_immCommandPool;
 
 		//Internal Render Image
-		AllocatedImage _drawImage;
+		AllocatedImage m_drawImage;
 
-		VkPipeline _gradientPipeline;
-		VkPipelineLayout _gradientPipelineLayout;
+		VkPipeline m_gradientPipeline;
+		VkPipelineLayout m_gradientPipelineLayout;
+
+		VkPhysicalDeviceProperties2 m_physicalDeviceProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+		VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR };
 	};
 }

@@ -46,6 +46,13 @@ VkCommandBufferSubmitInfo Moon::commandBufferSubmitInfo(VkCommandBuffer cmd)
 	return info;
 }
 
+VkCommandBufferBeginInfo Moon::commandBufferBeginInfo(VkCommandBufferUsageFlagBits flag)
+{
+	VkCommandBufferBeginInfo info{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
+	info.flags = flag;
+	return info;
+}
+
 VkSubmitInfo2 Moon::submitInfo(VkCommandBufferSubmitInfo* cmd, VkSemaphoreSubmitInfo* signalSemaphoreInfo, VkSemaphoreSubmitInfo* waitSemaphoreInfo)
 {
 	VkSubmitInfo2 info = { VK_STRUCTURE_TYPE_SUBMIT_INFO_2 };
@@ -146,4 +153,30 @@ VkWriteDescriptorSet Moon::writeDescriptorImage(VkDescriptorType type, VkDescrip
 	write.descriptorType = type;
 	write.pImageInfo = imageInfo;
 	return write;
+}
+
+VkRenderingAttachmentInfo Moon::attachmentInfo(VkImageView view, VkClearValue* clear, VkImageLayout layout)
+{
+	VkRenderingAttachmentInfo colorAttachment{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+	colorAttachment.imageView = view;
+	colorAttachment.imageLayout = layout;
+	colorAttachment.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	if (clear)
+	{
+		colorAttachment.clearValue = *clear;
+	}
+	return colorAttachment;
+}
+
+VkRenderingInfo Moon::renderingInfo(VkExtent2D windowExtent, VkRenderingAttachmentInfo* colorAttachment, VkRenderingAttachmentInfo* depthStencilAttachment)
+{
+	VkRenderingInfo renderingInfo{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+	renderingInfo.renderArea = { 0, 0, windowExtent.width, windowExtent.height };
+	renderingInfo.layerCount = 1;
+	renderingInfo.colorAttachmentCount = 1;
+	renderingInfo.pColorAttachments = colorAttachment;
+	renderingInfo.pDepthAttachment = depthStencilAttachment;
+	renderingInfo.pStencilAttachment = depthStencilAttachment;
+	return renderingInfo;
 }
