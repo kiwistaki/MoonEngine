@@ -7,6 +7,8 @@
 #include <functional>
 #include <span>
 
+#include <glm/glm.hpp>
+
 constexpr unsigned int FRAME_OVERLAP = 2;
 constexpr unsigned int SCREEN_WIDTH = 1920;
 constexpr unsigned int SCREEN_HEIGHT = 1080;
@@ -16,6 +18,14 @@ struct SDL_Window;
 
 namespace Moon
 {
+	struct ComputePushConstants
+	{
+		glm::vec4 data1;
+		glm::vec4 data2;
+		glm::vec4 data3;
+		glm::vec4 data4;
+	};
+
 	struct DeletionQueue
 	{
 		std::deque<std::function<void()>> deletors;
@@ -140,6 +150,7 @@ namespace Moon
 
 		VkPipeline m_gradientPipeline;
 		VkPipelineLayout m_gradientPipelineLayout;
+		ComputePushConstants m_gradientPipelinePushConstant;
 
 		VkPhysicalDeviceProperties2 m_physicalDeviceProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
 		VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR };

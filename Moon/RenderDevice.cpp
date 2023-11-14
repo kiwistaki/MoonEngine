@@ -56,6 +56,10 @@ namespace Moon
 		initRayTracing();
 		initImgui();
 
+		//Temp
+		m_gradientPipelinePushConstant.data1 = glm::vec4(1.0, 0.0, 0.0, 0.0);
+		m_gradientPipelinePushConstant.data2 = glm::vec4(0.0, 0.0, 1.0, 0.0);
+
 		//everything went fine
 		m_isInitialized = true;
 	}
@@ -137,7 +141,8 @@ namespace Moon
 	void RenderDevice::drawMain(VkCommandBuffer cmd)
 	{
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gradientPipeline);
-		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gradientPipelineLayout, 0, 1, &m_drawImageDescriptorSet, 0, nullptr);
+		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gradientPipelineLayout, 0, 1, &m_drawImageDescriptorSet, 0, nullptr);	
+		vkCmdPushConstants(cmd, m_gradientPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &m_gradientPipelinePushConstant);
 		vkCmdDispatch(cmd, (uint32_t)std::ceil(m_windowExtent.width / 16.0), (uint32_t)std::ceil(m_windowExtent.height / 16.0), 1);
 	}
 
@@ -175,7 +180,24 @@ namespace Moon
 			ImGui::NewFrame();
 
 			//some imgui UI to test
-			ImGui::ShowDemoWindow();
+			{
+				if(!ImGui::Begin("ColorGradient"))
+				{
+					ImGui::End();
+				}
+				else
+				{
+					ImGui::Text("Top Color:");
+					ImGui::SameLine();
+					ImGui::ColorEdit4("TopColor", (float*)&m_gradientPipelinePushConstant.data1, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+
+					ImGui::Text("Bottom Color:");
+					ImGui::SameLine();
+					ImGui::ColorEdit4("BottomColor", (float*)&m_gradientPipelinePushConstant.data2, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+
+					ImGui::End();
+				}
+			}
 
 			//make imgui calculate internal draw structures
 			ImGui::Render();
@@ -387,9 +409,16 @@ namespace Moon
 
 	void RenderDevice::initPipelines()
 	{
+		VkPushConstantRange pushConstantRange;
+		pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+		pushConstantRange.offset = 0;
+		pushConstantRange.size = sizeof(ComputePushConstants);
+
 		VkPipelineLayoutCreateInfo computeLayout{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
 		computeLayout.pSetLayouts = &m_drawImageDescriptorLayout;
 		computeLayout.setLayoutCount = 1;
+		computeLayout.pushConstantRangeCount = 1;
+		computeLayout.pPushConstantRanges = &pushConstantRange;
 		VK_CHECK(vkCreatePipelineLayout(m_device, &computeLayout, nullptr, &m_gradientPipelineLayout));
 
 		VkShaderModule computeDrawShader;
