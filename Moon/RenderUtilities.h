@@ -32,5 +32,21 @@ namespace Moon
 	VkRenderingAttachmentInfo attachmentInfo(VkImageView view, VkClearValue* clear, VkImageLayout layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
 	VkRenderingInfo renderingInfo(VkExtent2D windowExtent, VkRenderingAttachmentInfo* colorAttachment, VkRenderingAttachmentInfo* depthStencilAttachment);
+
+	VkPipelineShaderStageCreateInfo pipelineShaderStageCreateInfo(VkShaderStageFlagBits stage, VkShaderModule shaderModule);
+
+	VkPipelineVertexInputStateCreateInfo vertexInputStateCreateInfo();
+
+	VkPipelineInputAssemblyStateCreateInfo inputAssemblyCreateInfo(VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+
+	VkPipelineRasterizationStateCreateInfo rasterizationStateCreateInfo(VkPolygonMode polygonMode);
+
+	VkPipelineMultisampleStateCreateInfo multisamplingStateCreateInfo();
+
+	VkPipelineColorBlendAttachmentState colorBlendAttachmentState();
+
+	VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo();
+
+
 }
 

@@ -85,9 +85,6 @@ namespace Moon
 	class RenderDevice
 	{
 	public:
-		PFN_vkCmdBeginRenderingKHR vkCmdBeginRenderingKHR;
-		PFN_vkCmdEndRenderingKHR vkCmdEndRenderingKHR;
-
 		void init();
 		void cleanup();
 		void draw();
@@ -148,11 +145,49 @@ namespace Moon
 		//Internal Render Image
 		AllocatedImage m_drawImage;
 
+		//RayTracing
+		VkPhysicalDeviceProperties2 m_physicalDeviceProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+		VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR };
+		
+		// TEMP: For Compute Gradient
 		VkPipeline m_gradientPipeline;
 		VkPipelineLayout m_gradientPipelineLayout;
 		ComputePushConstants m_gradientPipelinePushConstant;
 
-		VkPhysicalDeviceProperties2 m_physicalDeviceProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
-		VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR };
+		// TEMP: For Triangle
+		VkPipeline m_trianglePipeline;
+		VkPipelineLayout m_trianglePipelineLayout;
+	};
+
+	class PipelineBuilder 
+	{
+	public:
+		PipelineBuilder();
+
+		void clear();
+		VkPipeline buildPipeline(VkDevice device);
+
+		void setShaders(VkShaderModule vertexShader, VkShaderModule fragmentShader);
+		void setPipelineLayout(VkPipelineLayout pipelineLayout);
+		void setInputTopology(VkPrimitiveTopology topology);
+		void setPolygonMode(VkPolygonMode mode);
+		void setCullMode(VkCullModeFlags cullMode, VkFrontFace frontFace);
+		void setMultisamplingNone();
+		void disableBlending();
+		void setColorAttachmentFormat(VkFormat format);
+		void setDepthFormat(VkFormat format);
+		void disableDepthtest();
+
+	public:
+		std::vector<VkPipelineShaderStageCreateInfo> m_shaderStages;
+		VkFormat m_colorAttachmentformat;
+		VkPipelineVertexInputStateCreateInfo m_vertexInputInfo;
+		VkPipelineInputAssemblyStateCreateInfo m_inputAssembly;
+		VkPipelineRasterizationStateCreateInfo m_rasterizer;
+		VkPipelineColorBlendAttachmentState m_colorBlendAttachment;
+		VkPipelineMultisampleStateCreateInfo m_multisampling;
+		VkPipelineLayout m_pipelineLayout;
+		VkPipelineDepthStencilStateCreateInfo m_depthStencil;
+		VkPipelineRenderingCreateInfo m_renderInfo;
 	};
 }

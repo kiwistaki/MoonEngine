@@ -37,6 +37,7 @@ target_link_libraries(sdl2 INTERFACE SDL2 SDL2main)
 
 add_library(imgui STATIC)
 target_include_directories(imgui PUBLIC imgui)
+target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
 target_sources(imgui PRIVATE 
   imgui/imgui.h
   imgui/imgui.cpp
@@ -52,3 +53,8 @@ target_sources(imgui PRIVATE
 target_link_libraries(imgui PUBLIC Vulkan::Vulkan sdl2)
 
 target_include_directories(stb_image INTERFACE stb_image)
+
+if (WIN32)
+   set(VOLK_STATIC_DEFINES VK_USE_PLATFORM_WIN32_KHR)
+endif()
+add_subdirectory(volk)

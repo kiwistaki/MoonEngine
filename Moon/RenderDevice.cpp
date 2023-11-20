@@ -3,6 +3,10 @@
 #include <iostream>
 #include <fstream>
 
+#define VK_USE_PLATFORM_WIN32_KHR
+#define VOLK_IMPLEMENTATION
+#include <volk/volk.h>
+
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_vulkan.h"
@@ -140,10 +144,51 @@ namespace Moon
 
 	void RenderDevice::drawMain(VkCommandBuffer cmd)
 	{
+		// Compute Gradient
 		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gradientPipeline);
 		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gradientPipelineLayout, 0, 1, &m_drawImageDescriptorSet, 0, nullptr);	
 		vkCmdPushConstants(cmd, m_gradientPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &m_gradientPipelinePushConstant);
 		vkCmdDispatch(cmd, (uint32_t)std::ceil(m_windowExtent.width / 16.0), (uint32_t)std::ceil(m_windowExtent.height / 16.0), 1);
+
+		// Triangle
+		VkRenderingAttachmentInfoKHR colorAttachment{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR };
+		colorAttachment.imageView = m_drawImage.imageView;
+		colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		colorAttachment.clearValue.color = { 0.0f,0.0f,0.0f,0.0f };
+
+		VkRenderingInfoKHR renderingInfo{ VK_STRUCTURE_TYPE_RENDERING_INFO_KHR };
+		renderingInfo.renderArea = { 0, 0, m_windowExtent.width, m_windowExtent.height };
+		renderingInfo.layerCount = 1;
+		renderingInfo.colorAttachmentCount = 1;
+		renderingInfo.pColorAttachments = &colorAttachment;
+		renderingInfo.pDepthAttachment = VK_NULL_HANDLE;
+		renderingInfo.pStencilAttachment = VK_NULL_HANDLE;
+
+		vkCmdBeginRenderingKHR(cmd, &renderingInfo);
+		{
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_trianglePipeline);
+
+			VkViewport viewport = {};
+			viewport.x = 0;
+			viewport.y = 0;
+			viewport.width  = static_cast<float>(m_windowExtent.width);
+			viewport.height = static_cast<float>(m_windowExtent.height);
+			viewport.minDepth = 0.f;
+			viewport.maxDepth = 1.f;
+			vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+			VkRect2D scissor = {};
+			scissor.offset.x = 0;
+			scissor.offset.y = 0;
+			scissor.extent.width = m_windowExtent.width;
+			scissor.extent.height = m_windowExtent.height;
+			vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+			vkCmdDraw(cmd, 3, 1, 0, 0);
+		}
+		vkCmdEndRenderingKHR(cmd);
 	}
 
 	void RenderDevice::drawImgui(VkCommandBuffer cmd, VkImageView targetImageView)
@@ -226,6 +271,8 @@ namespace Moon
 
 	void RenderDevice::initVulkan()
 	{
+		VK_CHECK(volkInitialize());
+
 		vkb::InstanceBuilder builder;
 		auto inst_ret = builder.set_app_name("Moon Engine")
 			.request_validation_layers(true)
@@ -237,32 +284,32 @@ namespace Moon
 		m_instance = vkb_inst.instance;
 		m_debugMessenger = vkb_inst.debug_messenger;
 
+		volkLoadInstance(m_instance);
+
 		SDL_Vulkan_CreateSurface(m_window, m_instance, &m_surface);
 
-		VkPhysicalDeviceVulkan13Features features{};
-		features.dynamicRendering = true;
-		features.synchronization2 = true;
+		VkPhysicalDeviceVulkan13Features features13{};
+		features13.dynamicRendering = true;
+		features13.synchronization2 = true;
 
 		vkb::PhysicalDeviceSelector selector{ vkb_inst };
 		vkb::PhysicalDevice physicalDevice = selector
+			.add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)
 			.set_minimum_version(1, 3)
-			.set_required_features_13(features)
+			.set_required_features_13(features13)
 			.set_surface(m_surface)
 			.select()
 			.value();
 
 		vkb::DeviceBuilder deviceBuilder{ physicalDevice };
-		vkb::Device vkbDevice = deviceBuilder
-			.build()
-			.value();
+		vkb::Device vkbDevice = deviceBuilder.build().value();
 		m_device = vkbDevice.device;
 		m_physicalDevice = physicalDevice.physical_device;
 
 		m_graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
 		m_graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
 
-		vkCmdBeginRenderingKHR = reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(vkGetDeviceProcAddr(m_device, "vkCmdBeginRenderingKHR"));
-		vkCmdEndRenderingKHR = reinterpret_cast<PFN_vkCmdEndRenderingKHR>(vkGetDeviceProcAddr(m_device, "vkCmdEndRenderingKHR"));
+		volkLoadDevice(m_device);
 
 		VmaAllocatorCreateInfo allocatorInfo = {};
 		allocatorInfo.physicalDevice = m_physicalDevice;
@@ -300,6 +347,7 @@ namespace Moon
 		drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 		drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 		drawImageUsages |= VK_IMAGE_USAGE_STORAGE_BIT;
+		drawImageUsages |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 		VkImageCreateInfo rimg_info = imageCreateInfo(m_drawImage.imageFormat, drawImageUsages, drawImageExtent);
 
 		VmaAllocationCreateInfo rimg_allocinfo = {};
@@ -409,40 +457,81 @@ namespace Moon
 
 	void RenderDevice::initPipelines()
 	{
-		VkPushConstantRange pushConstantRange;
-		pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-		pushConstantRange.offset = 0;
-		pushConstantRange.size = sizeof(ComputePushConstants);
-
-		VkPipelineLayoutCreateInfo computeLayout{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-		computeLayout.pSetLayouts = &m_drawImageDescriptorLayout;
-		computeLayout.setLayoutCount = 1;
-		computeLayout.pushConstantRangeCount = 1;
-		computeLayout.pPushConstantRanges = &pushConstantRange;
-		VK_CHECK(vkCreatePipelineLayout(m_device, &computeLayout, nullptr, &m_gradientPipelineLayout));
-
-		VkShaderModule computeDrawShader;
-		if (!loadShaderModule("../../Shaders/colorGradient.comp.spv", &computeDrawShader))
+		// TEMP: For compute gradient
 		{
-			std::cout << "Error when building the compute shader" << std::endl;
+			VkPushConstantRange pushConstantRange;
+			pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+			pushConstantRange.offset = 0;
+			pushConstantRange.size = sizeof(ComputePushConstants);
+
+			VkPipelineLayoutCreateInfo computeLayout{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+			computeLayout.pSetLayouts = &m_drawImageDescriptorLayout;
+			computeLayout.setLayoutCount = 1;
+			computeLayout.pushConstantRangeCount = 1;
+			computeLayout.pPushConstantRanges = &pushConstantRange;
+			VK_CHECK(vkCreatePipelineLayout(m_device, &computeLayout, nullptr, &m_gradientPipelineLayout));
+
+			VkShaderModule computeDrawShader;
+			if (!loadShaderModule("../../Shaders/colorGradient.comp.spv", &computeDrawShader))
+			{
+				std::cout << "Error when building the compute shader" << std::endl;
+			}
+
+			VkPipelineShaderStageCreateInfo stageinfo{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+			stageinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+			stageinfo.module = computeDrawShader;
+			stageinfo.pName = "main";
+
+			VkComputePipelineCreateInfo computePipelineCreateInfo{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+			computePipelineCreateInfo.layout = m_gradientPipelineLayout;
+			computePipelineCreateInfo.stage = stageinfo;
+			VK_CHECK(vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &computePipelineCreateInfo, nullptr, &m_gradientPipeline));
+
+			vkDestroyShaderModule(m_device, computeDrawShader, nullptr);
+			m_mainDeletionQueue.push_function([&]()
+				{
+					vkDestroyPipelineLayout(m_device, m_gradientPipelineLayout, nullptr);
+					vkDestroyPipeline(m_device, m_gradientPipeline, nullptr);
+				});
 		}
 
-		VkPipelineShaderStageCreateInfo stageinfo{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-		stageinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-		stageinfo.module = computeDrawShader;
-		stageinfo.pName = "main";
+		// TEMP: For Triangle
+		{
+			VkPipelineLayoutCreateInfo pipeline_layout_info = pipelineLayoutCreateInfo();
+			VK_CHECK(vkCreatePipelineLayout(m_device, &pipeline_layout_info, nullptr, &m_trianglePipelineLayout));
 
-		VkComputePipelineCreateInfo computePipelineCreateInfo{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
-		computePipelineCreateInfo.layout = m_gradientPipelineLayout;
-		computePipelineCreateInfo.stage = stageinfo;
-		VK_CHECK(vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &computePipelineCreateInfo, nullptr, &m_gradientPipeline));
-
-		vkDestroyShaderModule(m_device, computeDrawShader, nullptr);
-		m_mainDeletionQueue.push_function([&]()
+			VkShaderModule triangleVertexShader;
+			VkShaderModule triangleFragShader;
+			if (!loadShaderModule("../../Shaders/triangle.vert.spv", &triangleVertexShader))
 			{
-				vkDestroyPipelineLayout(m_device, m_gradientPipelineLayout, nullptr);
-				vkDestroyPipeline(m_device, m_gradientPipeline, nullptr);
-			});
+				std::cout << "Error when building the triangle vert shader" << std::endl;
+			}
+			if (!loadShaderModule("../../Shaders/triangle.frag.spv", &triangleFragShader))
+			{
+				std::cout << "Error when building the triangle frag shader" << std::endl;
+			}
+
+			PipelineBuilder pipelineBuilder;
+			pipelineBuilder.setShaders(triangleVertexShader, triangleFragShader);
+			pipelineBuilder.setPipelineLayout(m_trianglePipelineLayout);
+			pipelineBuilder.setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+			pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
+			pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+			pipelineBuilder.setMultisamplingNone();
+			pipelineBuilder.disableBlending();
+			pipelineBuilder.disableDepthtest();
+			pipelineBuilder.setColorAttachmentFormat(m_drawImage.imageFormat);
+			pipelineBuilder.setDepthFormat(VK_FORMAT_UNDEFINED);
+			m_trianglePipeline = pipelineBuilder.buildPipeline(m_device);
+
+			vkDestroyShaderModule(m_device, triangleVertexShader, nullptr);
+			vkDestroyShaderModule(m_device, triangleFragShader, nullptr);
+			m_mainDeletionQueue.push_function([&]()
+				{
+					vkDestroyPipelineLayout(m_device, m_trianglePipelineLayout, nullptr);
+					vkDestroyPipeline(m_device, m_trianglePipeline, nullptr);
+				});
+		}
 	}
 
 	void RenderDevice::initRayTracing()
@@ -453,9 +542,6 @@ namespace Moon
 
 	void RenderDevice::initImgui()
 	{
-		// 1: create descriptor pool for IMGUI
-		//  the size of the pool is very oversize, but it's copied from imgui demo
-		//  itself.
 		VkDescriptorPoolSize pool_sizes[] = { { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
 			{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
 			{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
@@ -477,14 +563,14 @@ namespace Moon
 		VkDescriptorPool imguiPool;
 		VK_CHECK(vkCreateDescriptorPool(m_device, &pool_info, nullptr, &imguiPool));
 
-		// 2: initialize imgui library
-		// this initializes the core structures of imgui
 		ImGui::CreateContext();
-
-		// this initializes imgui for SDL
 		ImGui_ImplSDL2_InitForVulkan(m_window);
 
-		// this initializes imgui for Vulkan
+		ImGui_ImplVulkan_LoadFunctions([](const char* function_name, void* vulkan_instance)
+			{
+				return vkGetInstanceProcAddr(*(reinterpret_cast<VkInstance*>(vulkan_instance)), function_name);
+			}, &m_instance);
+
 		ImGui_ImplVulkan_InitInfo init_info = {};
 		init_info.Instance = m_instance;
 		init_info.PhysicalDevice = m_physicalDevice;
@@ -498,12 +584,9 @@ namespace Moon
 		init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 		ImGui_ImplVulkan_Init(&init_info, VK_NULL_HANDLE);
 
-		// execute a gpu command to upload imgui font textures
 		immediateSubmit([&](VkCommandBuffer cmd) { ImGui_ImplVulkan_CreateFontsTexture(cmd); });
 
-		// clear font textures from cpu data
 		ImGui_ImplVulkan_DestroyFontUploadObjects();
-		// add the destroy the imgui created structures
 		m_mainDeletionQueue.push_function([=]()
 			{
 				vkDestroyDescriptorPool(m_device, imguiPool, nullptr);
@@ -610,5 +693,141 @@ namespace Moon
 		allocInfo.pSetLayouts = &layout;
 		vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet);
 		return descriptorSet;
+	}
+
+
+	PipelineBuilder::PipelineBuilder()
+	{
+		clear();
+	}
+
+	void PipelineBuilder::clear()
+	{
+		m_vertexInputInfo = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+		m_inputAssembly = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+		m_rasterizer = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+		m_colorBlendAttachment = {};
+		m_multisampling = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+		m_pipelineLayout = {};
+		m_depthStencil = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+		m_renderInfo = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+		m_shaderStages.clear();
+		//m_colorAttachmentformats.clear();
+	}
+
+	VkPipeline PipelineBuilder::buildPipeline(VkDevice device)
+	{
+		VkPipelineViewportStateCreateInfo viewportState = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+		viewportState.viewportCount = 1;
+		viewportState.scissorCount = 1;
+
+		VkPipelineColorBlendStateCreateInfo colorBlending = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+		colorBlending.logicOpEnable = VK_FALSE;
+		colorBlending.logicOp = VK_LOGIC_OP_COPY;
+		colorBlending.attachmentCount = 1;
+		colorBlending.pAttachments = &m_colorBlendAttachment;
+
+		VkGraphicsPipelineCreateInfo pipelineInfo = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+		pipelineInfo.stageCount = static_cast<uint32_t>(m_shaderStages.size());
+		pipelineInfo.pStages = m_shaderStages.data();
+		pipelineInfo.pVertexInputState = &m_vertexInputInfo;
+		pipelineInfo.pInputAssemblyState = &m_inputAssembly;
+		pipelineInfo.pViewportState = &viewportState;
+		pipelineInfo.pRasterizationState = &m_rasterizer;
+		pipelineInfo.pMultisampleState = &m_multisampling;
+		pipelineInfo.pColorBlendState = &colorBlending;
+		pipelineInfo.pDepthStencilState = &m_depthStencil;
+		pipelineInfo.layout = m_pipelineLayout;
+		pipelineInfo.renderPass = VK_NULL_HANDLE;
+		pipelineInfo.subpass = 0;
+		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+
+		VkDynamicState state[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+
+		VkPipelineDynamicStateCreateInfo dynamicInfo = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+		dynamicInfo.pDynamicStates = &state[0];
+		dynamicInfo.dynamicStateCount = 2;
+
+		pipelineInfo.pDynamicState = &dynamicInfo;
+
+		VkPipeline newPipeline;
+		if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS)
+		{
+			std::cout << "failed to create pipeline\n";
+			return VK_NULL_HANDLE; // failed to create graphics pipeline
+		}
+		else
+		{
+			return newPipeline;
+		}
+	}
+	
+	void PipelineBuilder::setShaders(VkShaderModule vertexShader, VkShaderModule fragmentShader)
+	{
+		m_shaderStages.clear();
+		m_shaderStages.push_back(pipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader));
+		m_shaderStages.push_back(pipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader));
+	}
+
+	void PipelineBuilder::setPipelineLayout(VkPipelineLayout pipelineLayout)
+	{
+		m_pipelineLayout = pipelineLayout;
+	}
+
+	void PipelineBuilder::setInputTopology(VkPrimitiveTopology topology)
+	{
+		m_inputAssembly.topology = topology;
+		m_inputAssembly.primitiveRestartEnable = VK_FALSE;
+	}
+	
+	void PipelineBuilder::setPolygonMode(VkPolygonMode mode)
+	{
+		m_rasterizer.polygonMode = mode;
+		m_rasterizer.lineWidth = 1.f;
+	}
+	
+	void PipelineBuilder::setCullMode(VkCullModeFlags cullMode, VkFrontFace frontFace)
+	{
+		m_rasterizer.cullMode = cullMode;
+		m_rasterizer.frontFace = frontFace;
+	}
+	
+	void PipelineBuilder::setMultisamplingNone()
+	{
+		m_multisampling.sampleShadingEnable = VK_FALSE;
+		m_multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+		m_multisampling.minSampleShading = 1.0f;
+		m_multisampling.pSampleMask = nullptr;
+		m_multisampling.alphaToCoverageEnable = VK_FALSE;
+		m_multisampling.alphaToOneEnable = VK_FALSE;
+	}
+	
+	void PipelineBuilder::disableBlending()
+	{
+		m_colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+		m_colorBlendAttachment.blendEnable = VK_FALSE;
+	}
+	
+	void PipelineBuilder::setColorAttachmentFormat(VkFormat format)
+	{
+		m_colorAttachmentformat = format;
+	}
+	
+	void PipelineBuilder::setDepthFormat(VkFormat format)
+	{
+		m_renderInfo.depthAttachmentFormat = format;
+	}
+	
+	void PipelineBuilder::disableDepthtest()
+	{
+		m_depthStencil.depthTestEnable = VK_FALSE;
+		m_depthStencil.depthWriteEnable = VK_FALSE;
+		m_depthStencil.depthCompareOp = VK_COMPARE_OP_NEVER;
+		m_depthStencil.depthBoundsTestEnable = VK_FALSE;
+		m_depthStencil.stencilTestEnable = VK_FALSE;
+		m_depthStencil.front = {};
+		m_depthStencil.back = {};
+		m_depthStencil.minDepthBounds = 0.f;
+		m_depthStencil.maxDepthBounds = 1.f;
 	}
 }

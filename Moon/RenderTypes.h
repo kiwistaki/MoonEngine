@@ -1,5 +1,8 @@
 ﻿#pragma once
+#define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
+#include <Volk/volk.h>
+
 #include <vk_mem_alloc.h>
 
 namespace Moon
