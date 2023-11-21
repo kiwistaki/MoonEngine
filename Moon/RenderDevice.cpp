@@ -22,6 +22,7 @@
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 
+#include <glm/gtx/transform.hpp>
 
 using namespace std;
 #define VK_CHECK(x)                                                    \
@@ -59,10 +60,11 @@ namespace Moon
 		initPipelines();
 		initRayTracing();
 		initImgui();
+		loadMeshes();
 
 		//Temp
-		m_gradientPipelinePushConstant.data1 = glm::vec4(1.0, 0.0, 0.0, 0.0);
-		m_gradientPipelinePushConstant.data2 = glm::vec4(0.0, 0.0, 1.0, 0.0);
+		m_gradientPipelinePushConstant.data1 = glm::vec4(1.0, 1.0, 1.0, 0.0);
+		m_gradientPipelinePushConstant.data2 = glm::vec4(0.0, 0.0, 0.0, 0.0);
 
 		//everything went fine
 		m_isInitialized = true;
@@ -150,7 +152,7 @@ namespace Moon
 		vkCmdPushConstants(cmd, m_gradientPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &m_gradientPipelinePushConstant);
 		vkCmdDispatch(cmd, (uint32_t)std::ceil(m_windowExtent.width / 16.0), (uint32_t)std::ceil(m_windowExtent.height / 16.0), 1);
 
-		// Triangle
+		// Draw Mesh
 		VkRenderingAttachmentInfoKHR colorAttachment{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR };
 		colorAttachment.imageView = m_drawImage.imageView;
 		colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -158,17 +160,27 @@ namespace Moon
 		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 		colorAttachment.clearValue.color = { 0.0f,0.0f,0.0f,0.0f };
 
+		VkRenderingAttachmentInfoKHR depthAttachment{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR };
+		depthAttachment.imageView = m_depthImage.imageView;
+		depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+		depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		depthAttachment.clearValue.depthStencil.depth = { 1.0f };
+
 		VkRenderingInfoKHR renderingInfo{ VK_STRUCTURE_TYPE_RENDERING_INFO_KHR };
 		renderingInfo.renderArea = { 0, 0, m_windowExtent.width, m_windowExtent.height };
 		renderingInfo.layerCount = 1;
 		renderingInfo.colorAttachmentCount = 1;
 		renderingInfo.pColorAttachments = &colorAttachment;
-		renderingInfo.pDepthAttachment = VK_NULL_HANDLE;
+		renderingInfo.pDepthAttachment = &depthAttachment;
 		renderingInfo.pStencilAttachment = VK_NULL_HANDLE;
 
 		vkCmdBeginRenderingKHR(cmd, &renderingInfo);
 		{
-			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_trianglePipeline);
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
+
+			VkDeviceSize offset = 0;
+			vkCmdBindVertexBuffers(cmd, 0, 1, &m_monkeyMesh.m_vertexBuffer.buffer, &offset);
 
 			VkViewport viewport = {};
 			viewport.x = 0;
@@ -186,7 +198,18 @@ namespace Moon
 			scissor.extent.height = m_windowExtent.height;
 			vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-			vkCmdDraw(cmd, 3, 1, 0, 0);
+			glm::vec3 camPos = { 0.f,0.f,-2.f };
+			glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
+			glm::mat4 projection = glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.0f);
+			projection[1][1] *= -1;
+			glm::mat4 model = glm::rotate(glm::mat4{ 1.0f }, glm::radians(m_frameNumber * 0.4f), glm::vec3(0, 1, 0));
+			glm::mat4 mesh_matrix = projection * view * model;
+
+			MeshPushConstants constants;
+			constants.renderMatrix = mesh_matrix;
+			vkCmdPushConstants(cmd, m_meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
+
+			vkCmdDraw(cmd, static_cast<uint32_t>(m_monkeyMesh.m_vertices.size()), 1, 0, 0);
 		}
 		vkCmdEndRenderingKHR(cmd);
 	}
@@ -295,6 +318,9 @@ namespace Moon
 		vkb::PhysicalDeviceSelector selector{ vkb_inst };
 		vkb::PhysicalDevice physicalDevice = selector
 			.add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)
+			.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
+			.add_required_extension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)
+			.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
 			.set_minimum_version(1, 3)
 			.set_required_features_13(features13)
 			.set_surface(m_surface)
@@ -355,13 +381,32 @@ namespace Moon
 		rimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 		vmaCreateImage(m_allocator, &rimg_info, &rimg_allocinfo, &m_drawImage.image, &m_drawImage.allocation, nullptr);
 
-		VkImageViewCreateInfo rview_info = imageviewCreateInfo(m_drawImage.imageFormat, m_drawImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
-		VK_CHECK(vkCreateImageView(m_device, &rview_info, nullptr, &m_drawImage.imageView));
+		VkImageViewCreateInfo view_info = imageviewCreateInfo(m_drawImage.imageFormat, m_drawImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
+		VK_CHECK(vkCreateImageView(m_device, &view_info, nullptr, &m_drawImage.imageView));
 
 		m_mainDeletionQueue.push_function([=]()
 			{
 				vkDestroyImageView(m_device, m_drawImage.imageView, nullptr);
 				vmaDestroyImage(m_allocator, m_drawImage.image, m_drawImage.allocation);
+			});
+
+		// Depth 
+		m_depthImage.imageFormat = VK_FORMAT_D32_SFLOAT;
+
+		VkImageCreateInfo dimg_info = imageCreateInfo(m_depthImage.imageFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, drawImageExtent);
+
+		VmaAllocationCreateInfo dimg_allocinfo = {};
+		dimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		dimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		vmaCreateImage(m_allocator, &dimg_info, &dimg_allocinfo, &m_depthImage.image, &m_depthImage.allocation, nullptr);
+
+		view_info = imageviewCreateInfo(m_depthImage.imageFormat, m_depthImage.image, VK_IMAGE_ASPECT_DEPTH_BIT);
+		VK_CHECK(vkCreateImageView(m_device, &view_info, nullptr, &m_depthImage.imageView));
+
+		m_mainDeletionQueue.push_function([=]()
+			{
+				vkDestroyImageView(m_device, m_depthImage.imageView, nullptr);
+				vmaDestroyImage(m_allocator, m_depthImage.image, m_depthImage.allocation);
 			});
 	}
 
@@ -497,39 +542,48 @@ namespace Moon
 
 		// TEMP: For Triangle
 		{
-			VkPipelineLayoutCreateInfo pipeline_layout_info = pipelineLayoutCreateInfo();
-			VK_CHECK(vkCreatePipelineLayout(m_device, &pipeline_layout_info, nullptr, &m_trianglePipelineLayout));
+			VkPushConstantRange push_constant;
+			push_constant.offset = 0;
+			push_constant.size = sizeof(MeshPushConstants);
+			push_constant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-			VkShaderModule triangleVertexShader;
-			VkShaderModule triangleFragShader;
-			if (!loadShaderModule("../../Shaders/triangle.vert.spv", &triangleVertexShader))
+			VkPipelineLayoutCreateInfo pipeline_layout_info = pipelineLayoutCreateInfo();
+			pipeline_layout_info.pPushConstantRanges = &push_constant;
+			pipeline_layout_info.pushConstantRangeCount = 1;
+			VK_CHECK(vkCreatePipelineLayout(m_device, &pipeline_layout_info, nullptr, &m_meshPipelineLayout));
+
+			VkShaderModule meshVertexShader;
+			VkShaderModule meshFragShader;
+			if (!loadShaderModule("../../Shaders/mesh.vert.spv", &meshVertexShader))
 			{
 				std::cout << "Error when building the triangle vert shader" << std::endl;
 			}
-			if (!loadShaderModule("../../Shaders/triangle.frag.spv", &triangleFragShader))
+			if (!loadShaderModule("../../Shaders/mesh.frag.spv", &meshFragShader))
 			{
 				std::cout << "Error when building the triangle frag shader" << std::endl;
 			}
 
+			VertexInputDescription vertexDescription = Vertex::getVertexDescription();
 			PipelineBuilder pipelineBuilder;
-			pipelineBuilder.setShaders(triangleVertexShader, triangleFragShader);
-			pipelineBuilder.setPipelineLayout(m_trianglePipelineLayout);
+			pipelineBuilder.setShaders(meshVertexShader, meshFragShader);
+			pipelineBuilder.setVertexInputInfo(vertexDescription);
+			pipelineBuilder.setPipelineLayout(m_meshPipelineLayout);
 			pipelineBuilder.setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
 			pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
 			pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
 			pipelineBuilder.setMultisamplingNone();
 			pipelineBuilder.disableBlending();
-			pipelineBuilder.disableDepthtest();
+			pipelineBuilder.enableDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL);
 			pipelineBuilder.setColorAttachmentFormat(m_drawImage.imageFormat);
-			pipelineBuilder.setDepthFormat(VK_FORMAT_UNDEFINED);
-			m_trianglePipeline = pipelineBuilder.buildPipeline(m_device);
+			pipelineBuilder.setDepthFormat(m_depthImage.imageFormat);
+			m_meshPipeline = pipelineBuilder.buildPipeline(m_device);
 
-			vkDestroyShaderModule(m_device, triangleVertexShader, nullptr);
-			vkDestroyShaderModule(m_device, triangleFragShader, nullptr);
+			vkDestroyShaderModule(m_device, meshVertexShader, nullptr);
+			vkDestroyShaderModule(m_device, meshFragShader, nullptr);
 			m_mainDeletionQueue.push_function([&]()
 				{
-					vkDestroyPipelineLayout(m_device, m_trianglePipelineLayout, nullptr);
-					vkDestroyPipeline(m_device, m_trianglePipeline, nullptr);
+					vkDestroyPipelineLayout(m_device, m_meshPipelineLayout, nullptr);
+					vkDestroyPipeline(m_device, m_meshPipeline, nullptr);
 				});
 		}
 	}
@@ -594,6 +648,12 @@ namespace Moon
 			});
 	}
 
+	void RenderDevice::loadMeshes()
+	{
+		m_monkeyMesh.loadFromObj("../../assets/monkey_smooth.obj");
+		uploadMesh(m_monkeyMesh);
+	}
+
 	FrameData& RenderDevice::getCurrentFrame()
 	{
 		return m_frames[m_frameNumber % FRAME_OVERLAP];
@@ -623,6 +683,30 @@ namespace Moon
 		}
 		*outShaderModule = shaderModule;
 		return true;
+	}
+
+	void RenderDevice::uploadMesh(Mesh& mesh)
+	{
+		VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+		bufferInfo.size = mesh.m_vertices.size() * sizeof(Vertex);
+		bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+
+		VmaAllocationCreateInfo vmaallocInfo = {};
+		vmaallocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+		VK_CHECK(vmaCreateBuffer(m_allocator, &bufferInfo, &vmaallocInfo,
+			&mesh.m_vertexBuffer.buffer,
+			&mesh.m_vertexBuffer.allocation,
+			nullptr));
+
+		m_mainDeletionQueue.push_function([=]()
+			{
+				vmaDestroyBuffer(m_allocator, mesh.m_vertexBuffer.buffer, mesh.m_vertexBuffer.allocation);
+			});
+
+		void* data;
+		vmaMapMemory(m_allocator, mesh.m_vertexBuffer.allocation, &data);
+		memcpy(data, mesh.m_vertices.data(), mesh.m_vertices.size() * sizeof(Vertex));
+		vmaUnmapMemory(m_allocator, mesh.m_vertexBuffer.allocation);
 	}
 
 	void DescriptorLayoutBuilder::addBinding(uint32_t binding, VkDescriptorType type)
@@ -743,12 +827,12 @@ namespace Moon
 		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
 		VkDynamicState state[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-
 		VkPipelineDynamicStateCreateInfo dynamicInfo = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
-		dynamicInfo.pDynamicStates = &state[0];
 		dynamicInfo.dynamicStateCount = 2;
-
+		dynamicInfo.pDynamicStates = &state[0];
 		pipelineInfo.pDynamicState = &dynamicInfo;
+
+		pipelineInfo.pNext = &m_renderInfo;
 
 		VkPipeline newPipeline;
 		if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS)
@@ -778,6 +862,14 @@ namespace Moon
 	{
 		m_inputAssembly.topology = topology;
 		m_inputAssembly.primitiveRestartEnable = VK_FALSE;
+	}
+
+	void PipelineBuilder::setVertexInputInfo(VertexInputDescription& vertexInput)
+	{
+		m_vertexInputInfo.pVertexAttributeDescriptions = vertexInput.attributes.data();
+		m_vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexInput.attributes.size());
+		m_vertexInputInfo.pVertexBindingDescriptions = vertexInput.bindings.data();
+		m_vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexInput.bindings.size());
 	}
 	
 	void PipelineBuilder::setPolygonMode(VkPolygonMode mode)
@@ -818,11 +910,12 @@ namespace Moon
 		m_renderInfo.depthAttachmentFormat = format;
 	}
 	
-	void PipelineBuilder::disableDepthtest()
+	void PipelineBuilder::enableDepthTest(bool bDepthTest, bool bDepthWrite, VkCompareOp compareOp)
 	{
-		m_depthStencil.depthTestEnable = VK_FALSE;
-		m_depthStencil.depthWriteEnable = VK_FALSE;
-		m_depthStencil.depthCompareOp = VK_COMPARE_OP_NEVER;
+		m_depthStencil.depthTestEnable = bDepthTest ? VK_TRUE : VK_FALSE;
+		m_depthStencil.depthWriteEnable = bDepthWrite ? VK_TRUE : VK_FALSE;
+		m_depthStencil.depthCompareOp = bDepthTest ? compareOp : VK_COMPARE_OP_NEVER;
+
 		m_depthStencil.depthBoundsTestEnable = VK_FALSE;
 		m_depthStencil.stencilTestEnable = VK_FALSE;
 		m_depthStencil.front = {};

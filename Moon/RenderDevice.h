@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include "RenderTypes.h"
 #include "RenderImage.h"
+#include "RenderMesh.h"
 
 #include <vector>
 #include <deque>
@@ -24,6 +25,12 @@ namespace Moon
 		glm::vec4 data2;
 		glm::vec4 data3;
 		glm::vec4 data4;
+	};
+
+	struct MeshPushConstants
+	{
+		glm::vec4 data;
+		glm::mat4 renderMatrix;
 	};
 
 	struct DeletionQueue
@@ -103,10 +110,13 @@ namespace Moon
 		void initPipelines();
 		void initRayTracing();
 		void initImgui();
+		void loadMeshes();
+
 
 		FrameData& getCurrentFrame();
 
 		bool loadShaderModule(const char* filePath, VkShaderModule* shaderModule);
+		void uploadMesh(Mesh& mesh);
 
 	private:
 		bool m_isInitialized{ false };
@@ -144,6 +154,7 @@ namespace Moon
 
 		//Internal Render Image
 		AllocatedImage m_drawImage;
+		AllocatedImage m_depthImage;
 
 		//RayTracing
 		VkPhysicalDeviceProperties2 m_physicalDeviceProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
@@ -154,9 +165,10 @@ namespace Moon
 		VkPipelineLayout m_gradientPipelineLayout;
 		ComputePushConstants m_gradientPipelinePushConstant;
 
-		// TEMP: For Triangle
-		VkPipeline m_trianglePipeline;
-		VkPipelineLayout m_trianglePipelineLayout;
+		// TEMP: For Mesh
+		Mesh m_monkeyMesh;
+		VkPipeline m_meshPipeline;
+		VkPipelineLayout m_meshPipelineLayout;
 	};
 
 	class PipelineBuilder 
@@ -170,13 +182,14 @@ namespace Moon
 		void setShaders(VkShaderModule vertexShader, VkShaderModule fragmentShader);
 		void setPipelineLayout(VkPipelineLayout pipelineLayout);
 		void setInputTopology(VkPrimitiveTopology topology);
+		void setVertexInputInfo(VertexInputDescription& vertexInput);
 		void setPolygonMode(VkPolygonMode mode);
 		void setCullMode(VkCullModeFlags cullMode, VkFrontFace frontFace);
 		void setMultisamplingNone();
 		void disableBlending();
 		void setColorAttachmentFormat(VkFormat format);
 		void setDepthFormat(VkFormat format);
-		void disableDepthtest();
+		void enableDepthTest(bool bDepthTest, bool bDepthWrite, VkCompareOp compareOp);
 
 	public:
 		std::vector<VkPipelineShaderStageCreateInfo> m_shaderStages;
