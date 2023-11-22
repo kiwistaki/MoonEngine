@@ -61,6 +61,7 @@ namespace Moon
 		initRayTracing();
 		initImgui();
 		loadMeshes();
+		initScene();
 
 		//Temp
 		m_gradientPipelinePushConstant.data1 = glm::vec4(1.0, 1.0, 1.0, 0.0);
@@ -75,6 +76,12 @@ namespace Moon
 		{
 			vkDeviceWaitIdle(m_device);
 			m_mainDeletionQueue.flush();
+
+			for (auto material : m_materials)
+			{
+				vkDestroyPipeline(m_device, material.second.pipeline, nullptr);
+				vkDestroyPipelineLayout(m_device, material.second.pipelineLayout, nullptr);
+			}
 
 			//destroy swapchain resources
 			vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
@@ -177,11 +184,6 @@ namespace Moon
 
 		vkCmdBeginRenderingKHR(cmd, &renderingInfo);
 		{
-			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
-
-			VkDeviceSize offset = 0;
-			vkCmdBindVertexBuffers(cmd, 0, 1, &m_monkeyMesh.m_vertexBuffer.buffer, &offset);
-
 			VkViewport viewport = {};
 			viewport.x = 0;
 			viewport.y = 0;
@@ -198,20 +200,46 @@ namespace Moon
 			scissor.extent.height = m_windowExtent.height;
 			vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-			glm::vec3 camPos = { 0.f,0.f,-2.f };
-			glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
-			glm::mat4 projection = glm::perspective(glm::radians(70.f), 1700.f / 900.f, 0.1f, 200.0f);
-			projection[1][1] *= -1;
-			glm::mat4 model = glm::rotate(glm::mat4{ 1.0f }, glm::radians(m_frameNumber * 0.4f), glm::vec3(0, 1, 0));
+			drawRenderObjects(cmd, m_renderables.data(), static_cast<int>(m_renderables.size()));
+		}
+		vkCmdEndRenderingKHR(cmd);
+	}
+
+	void RenderDevice::drawRenderObjects(VkCommandBuffer cmd, RenderObject* first, int count)
+	{
+		glm::vec3 camPos = { 0.f,-6.f,-10.f };
+
+		glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
+		glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)m_windowExtent.width / (float)m_windowExtent.height, 0.1f, 200.0f);
+		projection[1][1] *= -1;
+
+		Mesh* lastMesh = nullptr;
+		Material* lastMaterial = nullptr;
+		for (int i = 0; i < count; i++)
+		{
+			RenderObject& object = first[i];
+
+			if (object.material != lastMaterial)
+			{
+				vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipeline);
+				lastMaterial = object.material;
+			}
+
+			glm::mat4 model = object.transformMatrix;
 			glm::mat4 mesh_matrix = projection * view * model;
 
 			MeshPushConstants constants;
 			constants.renderMatrix = mesh_matrix;
-			vkCmdPushConstants(cmd, m_meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
+			vkCmdPushConstants(cmd, object.material->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
 
-			vkCmdDraw(cmd, static_cast<uint32_t>(m_monkeyMesh.m_vertices.size()), 1, 0, 0);
+			if (object.mesh != lastMesh)
+			{
+				VkDeviceSize offset = 0;
+				vkCmdBindVertexBuffers(cmd, 0, 1, &object.mesh->m_vertexBuffer.buffer, &offset);
+				lastMesh = object.mesh;
+			}
+			vkCmdDraw(cmd, static_cast<uint32_t>(object.mesh->m_vertices.size()), 1, 0, 0);
 		}
-		vkCmdEndRenderingKHR(cmd);
 	}
 
 	void RenderDevice::drawImgui(VkCommandBuffer cmd, VkImageView targetImageView)
@@ -290,6 +318,41 @@ namespace Moon
 		VkSubmitInfo2 submit = Moon::submitInfo(&cmdinfo, nullptr, nullptr);
 		VK_CHECK(vkQueueSubmit2(m_graphicsQueue, 1, &submit, m_immFence));
 		VK_CHECK(vkWaitForFences(m_device, 1, &m_immFence, true, 9999999999));
+	}
+
+	Material* RenderDevice::createMaterial(VkPipeline pipeline, VkPipelineLayout layout, const std::string& name)
+	{
+		Material mat;
+		mat.pipeline = pipeline;
+		mat.pipelineLayout = layout;
+		m_materials[name] = mat;
+		return &m_materials[name];
+	}
+
+	Material* RenderDevice::getMaterial(const std::string& name)
+	{
+		auto it = m_materials.find(name);
+		if (it == m_materials.end())
+		{
+			return nullptr;
+		}
+		else
+		{
+			return &(*it).second;
+		}
+	}
+
+	Mesh* RenderDevice::getMesh(const std::string& name)
+	{
+		auto it = m_meshes.find(name);
+		if (it == m_meshes.end())
+		{
+			return nullptr;
+		}
+		else
+		{
+			return &(*it).second;
+		}
 	}
 
 	void RenderDevice::initVulkan()
@@ -540,7 +603,7 @@ namespace Moon
 				});
 		}
 
-		// TEMP: For Triangle
+		// TEMP: For Mesh
 		{
 			VkPushConstantRange push_constant;
 			push_constant.offset = 0;
@@ -550,7 +613,8 @@ namespace Moon
 			VkPipelineLayoutCreateInfo pipeline_layout_info = pipelineLayoutCreateInfo();
 			pipeline_layout_info.pPushConstantRanges = &push_constant;
 			pipeline_layout_info.pushConstantRangeCount = 1;
-			VK_CHECK(vkCreatePipelineLayout(m_device, &pipeline_layout_info, nullptr, &m_meshPipelineLayout));
+			VkPipelineLayout meshPipelineLayout;
+			VK_CHECK(vkCreatePipelineLayout(m_device, &pipeline_layout_info, nullptr, &meshPipelineLayout));
 
 			VkShaderModule meshVertexShader;
 			VkShaderModule meshFragShader;
@@ -567,7 +631,7 @@ namespace Moon
 			PipelineBuilder pipelineBuilder;
 			pipelineBuilder.setShaders(meshVertexShader, meshFragShader);
 			pipelineBuilder.setVertexInputInfo(vertexDescription);
-			pipelineBuilder.setPipelineLayout(m_meshPipelineLayout);
+			pipelineBuilder.setPipelineLayout(meshPipelineLayout);
 			pipelineBuilder.setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
 			pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
 			pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
@@ -576,14 +640,17 @@ namespace Moon
 			pipelineBuilder.enableDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL);
 			pipelineBuilder.setColorAttachmentFormat(m_drawImage.imageFormat);
 			pipelineBuilder.setDepthFormat(m_depthImage.imageFormat);
-			m_meshPipeline = pipelineBuilder.buildPipeline(m_device);
+			VkPipeline meshPipeline;
+			meshPipeline = pipelineBuilder.buildPipeline(m_device);
+
+			createMaterial(std::move(meshPipeline), std::move(meshPipelineLayout), "DefaultMesh");
 
 			vkDestroyShaderModule(m_device, meshVertexShader, nullptr);
 			vkDestroyShaderModule(m_device, meshFragShader, nullptr);
 			m_mainDeletionQueue.push_function([&]()
 				{
-					vkDestroyPipelineLayout(m_device, m_meshPipelineLayout, nullptr);
-					vkDestroyPipeline(m_device, m_meshPipeline, nullptr);
+					//vkDestroyPipelineLayout(m_device, m_meshPipelineLayout, nullptr);
+					//vkDestroyPipeline(m_device, m_meshPipeline, nullptr);
 				});
 		}
 	}
@@ -650,8 +717,29 @@ namespace Moon
 
 	void RenderDevice::loadMeshes()
 	{
-		m_monkeyMesh.loadFromObj("../../assets/monkey_smooth.obj");
-		uploadMesh(m_monkeyMesh);
+		Mesh monkey;
+		monkey.loadFromObj("../../assets/monkey_smooth.obj");
+		uploadMesh(monkey);
+		m_meshes["monkey"] = std::move(monkey);
+	}
+
+	void RenderDevice::initScene()
+	{
+		RenderObject monkey;
+		monkey.mesh = getMesh("monkey");
+		monkey.material = getMaterial("DefaultMesh");
+		monkey.transformMatrix = glm::mat4{ 1.0f };
+
+		for (int x = -20; x <= 20; x++)
+		{
+			for (int y = -20; y <= 20; y++)
+			{
+				glm::mat4 translation = glm::translate(glm::mat4{ 1.0 }, glm::vec3(x, 0, y));
+				glm::mat4 scale = glm::scale(glm::mat4{ 1.0 }, glm::vec3(0.2, 0.2, 0.2));
+				monkey.transformMatrix = translation * scale;
+				m_renderables.push_back(monkey);
+			}
+		}
 	}
 
 	FrameData& RenderDevice::getCurrentFrame()
@@ -778,7 +866,6 @@ namespace Moon
 		vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet);
 		return descriptorSet;
 	}
-
 
 	PipelineBuilder::PipelineBuilder()
 	{

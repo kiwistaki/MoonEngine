@@ -7,6 +7,8 @@
 #include <deque>
 #include <functional>
 #include <span>
+#include <unordered_map>
+#include <string>
 
 #include <glm/glm.hpp>
 
@@ -31,6 +33,19 @@ namespace Moon
 	{
 		glm::vec4 data;
 		glm::mat4 renderMatrix;
+	};
+
+	struct Material
+	{
+		VkPipeline pipeline;
+		VkPipelineLayout pipelineLayout;
+	};
+
+	struct RenderObject
+	{
+		Mesh* mesh;
+		Material* material;
+		glm::mat4 transformMatrix;
 	};
 
 	struct DeletionQueue
@@ -96,10 +111,15 @@ namespace Moon
 		void cleanup();
 		void draw();
 		void drawMain(VkCommandBuffer cmd);
+		void drawRenderObjects(VkCommandBuffer cmd, RenderObject* first, int count);
 		void drawImgui(VkCommandBuffer cmd, VkImageView targetImageView);
 		void run();
 
 		void immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function);
+
+		Material* createMaterial(VkPipeline pipeline, VkPipelineLayout layout, const std::string& name);
+		Material* getMaterial(const std::string& name);
+		Mesh* getMesh(const std::string& name);
 
 	private:
 		void initVulkan();
@@ -111,6 +131,7 @@ namespace Moon
 		void initRayTracing();
 		void initImgui();
 		void loadMeshes();
+		void initScene();
 
 
 		FrameData& getCurrentFrame();
@@ -160,15 +181,15 @@ namespace Moon
 		VkPhysicalDeviceProperties2 m_physicalDeviceProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
 		VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR };
 		
+		//Scene Management
+		std::vector<RenderObject> m_renderables;
+		std::unordered_map<std::string, Material> m_materials;
+		std::unordered_map<std::string, Mesh> m_meshes;
+
 		// TEMP: For Compute Gradient
 		VkPipeline m_gradientPipeline;
 		VkPipelineLayout m_gradientPipelineLayout;
 		ComputePushConstants m_gradientPipelinePushConstant;
-
-		// TEMP: For Mesh
-		Mesh m_monkeyMesh;
-		VkPipeline m_meshPipeline;
-		VkPipelineLayout m_meshPipelineLayout;
 	};
 
 	class PipelineBuilder 
