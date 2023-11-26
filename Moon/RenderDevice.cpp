@@ -75,6 +75,13 @@ namespace Moon
 		if (m_isInitialized)
 		{
 			vkDeviceWaitIdle(m_device);
+
+			for (int i = 0; i < FRAME_OVERLAP; i++)
+			{
+				vmaDestroyBuffer(m_allocator, m_frames[i].objectBuffer.buffer, m_frames[i].objectBuffer.allocation);
+				vmaDestroyBuffer(m_allocator, m_frames[i].cameraBuffer.buffer, m_frames[i].cameraBuffer.allocation);
+			}
+
 			m_mainDeletionQueue.flush();
 
 			for (auto material : m_materials)
@@ -207,11 +214,54 @@ namespace Moon
 
 	void RenderDevice::drawRenderObjects(VkCommandBuffer cmd, RenderObject* first, int count)
 	{
-		glm::vec3 camPos = { 0.f,-6.f,-10.f };
+		int frameIndex = m_frameNumber % FRAME_OVERLAP;
 
-		glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
-		glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)m_windowExtent.width / (float)m_windowExtent.height, 0.1f, 200.0f);
-		projection[1][1] *= -1;
+		//Update Camera
+		{
+			glm::vec3 camPos = { 0.f,-6.f,-10.f };
+
+			glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
+			glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)m_windowExtent.width / (float)m_windowExtent.height, 0.1f, 200.0f);
+			projection[1][1] *= -1;
+
+			GPUCameraData camData;
+			camData.proj = projection;
+			camData.view = view;
+			camData.viewproj = projection * view;
+
+			void* data;
+			vmaMapMemory(m_allocator, getCurrentFrame().cameraBuffer.allocation, &data);
+			memcpy(data, &camData, sizeof(GPUCameraData));
+			vmaUnmapMemory(m_allocator, getCurrentFrame().cameraBuffer.allocation);
+		}
+
+		//Update Scene data
+		{
+			float framed = (m_frameNumber / 120.f);
+			m_sceneParameters.ambientColor = { sin(framed),0,cos(framed),1 };
+
+			char* sceneData;
+			vmaMapMemory(m_allocator, m_sceneParameterBuffer.allocation, (void**)&sceneData);	
+			sceneData += padUniformBufferSize(sizeof(GPUSceneData)) * frameIndex;
+			memcpy(sceneData, &m_sceneParameters, sizeof(GPUSceneData));
+			vmaUnmapMemory(m_allocator, m_sceneParameterBuffer.allocation);
+		}
+
+		// Update Object SSBO
+		{
+			void* objectData;
+			vmaMapMemory(m_allocator, getCurrentFrame().objectBuffer.allocation, &objectData);
+
+			GPUObjectData* objectSSBO = (GPUObjectData*)objectData;
+
+			for (int i = 0; i < count; i++)
+			{
+				RenderObject& object = first[i];
+				objectSSBO[i].modelMatrix = object.transformMatrix;
+			}
+
+			vmaUnmapMemory(m_allocator, getCurrentFrame().objectBuffer.allocation);
+		}
 
 		Mesh* lastMesh = nullptr;
 		Material* lastMaterial = nullptr;
@@ -223,13 +273,15 @@ namespace Moon
 			{
 				vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipeline);
 				lastMaterial = object.material;
+
+				uint32_t uniform_offset = (uint32_t)padUniformBufferSize(sizeof(GPUSceneData)) * frameIndex;
+				vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout, 0, 1, &getCurrentFrame().globalDescriptor, 1, &uniform_offset);
+
+				vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout, 1, 1, &getCurrentFrame().objectDescriptor, 0, nullptr);
 			}
 
-			glm::mat4 model = object.transformMatrix;
-			glm::mat4 mesh_matrix = projection * view * model;
-
 			MeshPushConstants constants;
-			constants.renderMatrix = mesh_matrix;
+			constants.renderMatrix = object.transformMatrix;
 			vkCmdPushConstants(cmd, object.material->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
 
 			if (object.mesh != lastMesh)
@@ -238,7 +290,7 @@ namespace Moon
 				vkCmdBindVertexBuffers(cmd, 0, 1, &object.mesh->m_vertexBuffer.buffer, &offset);
 				lastMesh = object.mesh;
 			}
-			vkCmdDraw(cmd, static_cast<uint32_t>(object.mesh->m_vertices.size()), 1, 0, 0);
+			vkCmdDraw(cmd, static_cast<uint32_t>(object.mesh->m_vertices.size()), 1, 0, i);
 		}
 	}
 
@@ -355,6 +407,20 @@ namespace Moon
 		}
 	}
 
+	AllocatedBuffer RenderDevice::createBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage)
+	{
+		VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+		bufferInfo.size = allocSize;
+		bufferInfo.usage = usage;
+
+		VmaAllocationCreateInfo vmaallocInfo = {};
+		vmaallocInfo.usage = memoryUsage;
+
+		AllocatedBuffer newBuffer;
+		VK_CHECK(vmaCreateBuffer(m_allocator, &bufferInfo, &vmaallocInfo, &newBuffer.buffer, &newBuffer.allocation, nullptr));
+		return newBuffer;
+	}
+
 	void RenderDevice::initVulkan()
 	{
 		VK_CHECK(volkInitialize());
@@ -384,16 +450,21 @@ namespace Moon
 			.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)
 			.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
+			.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
 			.set_minimum_version(1, 3)
 			.set_required_features_13(features13)
 			.set_surface(m_surface)
 			.select()
 			.value();
 
+		VkPhysicalDeviceShaderDrawParametersFeatures shaderDrawParametersFeatures = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES };
+		shaderDrawParametersFeatures.shaderDrawParameters = VK_TRUE;
+
 		vkb::DeviceBuilder deviceBuilder{ physicalDevice };
-		vkb::Device vkbDevice = deviceBuilder.build().value();
+		vkb::Device vkbDevice = deviceBuilder.add_pNext(&shaderDrawParametersFeatures).build().value();
 		m_device = vkbDevice.device;
 		m_physicalDevice = physicalDevice.physical_device;
+		m_gpuProperties = vkbDevice.physical_device.properties;
 
 		m_graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
 		m_graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
@@ -525,9 +596,13 @@ namespace Moon
 
 	void RenderDevice::initDescriptors()
 	{
+		// Descriptor Pool
 		std::vector<DescriptorAllocator::PoolSizeRatio> sizes =
 		{
-			{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 }
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 10 },
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 10 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 10 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10 }
 		};
 		m_globalDescriptorAllocator.initPool(m_device, 10, sizes);
 		m_mainDeletionQueue.push_function([=]()
@@ -536,10 +611,11 @@ namespace Moon
 				m_globalDescriptorAllocator.destroyPool(m_device);
 			});
 
+		// Descriptor Set Compute Color Gradient
 		{
 			DescriptorLayoutBuilder builder;
-			builder.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-			m_drawImageDescriptorLayout = builder.build(m_device, VK_SHADER_STAGE_COMPUTE_BIT);
+			builder.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT);
+			m_drawImageDescriptorLayout = builder.build(m_device);
 			m_drawImageDescriptorSet = m_globalDescriptorAllocator.allocate(m_device, m_drawImageDescriptorLayout);
 			m_mainDeletionQueue.push_function([=]()
 				{
@@ -561,6 +637,78 @@ namespace Moon
 			VkWriteDescriptorSet texture1 = writeDescriptorImage(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, m_drawImageDescriptorSet, &imageBufferInfo, 0);
 			vkUpdateDescriptorSets(m_device, 1, &texture1, 0, nullptr);
 		}
+
+		// Descriptor Set Global
+		{
+			DescriptorLayoutBuilder builder;
+			builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT);
+			builder.addBinding(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+			m_globalSetLayout = builder.build(m_device);
+
+			for (int i = 0; i < FRAME_OVERLAP; i++)
+			{
+				m_frames[i].globalDescriptor = m_globalDescriptorAllocator.allocate(m_device, m_globalSetLayout);
+			}
+
+			m_mainDeletionQueue.push_function([&]()
+				{
+					vkDestroyDescriptorSetLayout(m_device, m_globalSetLayout, nullptr);
+				});
+		}
+
+		// Descriptor Set Object
+		{
+			DescriptorLayoutBuilder builder;
+			builder.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT);
+			m_objectSetLayout = builder.build(m_device);
+
+			for (int i = 0; i < FRAME_OVERLAP; i++)
+			{
+				m_frames[i].objectDescriptor = m_globalDescriptorAllocator.allocate(m_device, m_objectSetLayout);
+			}
+
+			m_mainDeletionQueue.push_function([&]()
+				{
+					vkDestroyDescriptorSetLayout(m_device, m_objectSetLayout, nullptr);
+				});
+		}
+
+		const size_t sceneParamBufferSize = FRAME_OVERLAP * padUniformBufferSize(sizeof(GPUSceneData));
+		m_sceneParameterBuffer = createBuffer(sceneParamBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+		m_mainDeletionQueue.push_function([&]()
+			{
+				vmaDestroyBuffer(m_allocator, m_sceneParameterBuffer.buffer, m_sceneParameterBuffer.allocation);
+			});
+
+
+		for (int i = 0; i < FRAME_OVERLAP; i++)
+		{
+			m_frames[i].cameraBuffer = createBuffer(sizeof(GPUCameraData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+			const int MAX_OBJECTS = 10000;
+			m_frames[i].objectBuffer = createBuffer(sizeof(GPUObjectData) * MAX_OBJECTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+			VkDescriptorBufferInfo cameraInfo;
+			cameraInfo.buffer = m_frames[i].cameraBuffer.buffer;
+			cameraInfo.offset = 0;
+			cameraInfo.range = sizeof(GPUCameraData);
+
+			VkDescriptorBufferInfo sceneInfo;
+			sceneInfo.buffer = m_sceneParameterBuffer.buffer;
+			sceneInfo.offset = 0;
+			sceneInfo.range = sizeof(GPUSceneData);
+
+			VkDescriptorBufferInfo objectBufferInfo;
+			objectBufferInfo.buffer = m_frames[i].objectBuffer.buffer;
+			objectBufferInfo.offset = 0;
+			objectBufferInfo.range = sizeof(GPUObjectData) * MAX_OBJECTS;
+
+			VkWriteDescriptorSet cameraWrite = writeDescriptorBuffer(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, m_frames[i].globalDescriptor, &cameraInfo, 0);
+			VkWriteDescriptorSet sceneWrite = writeDescriptorBuffer(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, m_frames[i].globalDescriptor, &sceneInfo, 1);
+			VkWriteDescriptorSet objectWrite = writeDescriptorBuffer(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, m_frames[i].objectDescriptor, &objectBufferInfo, 0);
+			VkWriteDescriptorSet setWrites[] = { cameraWrite, sceneWrite, objectWrite };
+			vkUpdateDescriptorSets(m_device, 3, setWrites, 0, nullptr);
+		}	
 	}
 
 	void RenderDevice::initPipelines()
@@ -610,9 +758,14 @@ namespace Moon
 			push_constant.size = sizeof(MeshPushConstants);
 			push_constant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
+			VkDescriptorSetLayout setLayouts[] = { m_globalSetLayout, m_objectSetLayout };
+
 			VkPipelineLayoutCreateInfo pipeline_layout_info = pipelineLayoutCreateInfo();
 			pipeline_layout_info.pPushConstantRanges = &push_constant;
 			pipeline_layout_info.pushConstantRangeCount = 1;
+			pipeline_layout_info.setLayoutCount = 2;
+			pipeline_layout_info.pSetLayouts = setLayouts;
+
 			VkPipelineLayout meshPipelineLayout;
 			VK_CHECK(vkCreatePipelineLayout(m_device, &pipeline_layout_info, nullptr, &meshPipelineLayout));
 
@@ -647,11 +800,6 @@ namespace Moon
 
 			vkDestroyShaderModule(m_device, meshVertexShader, nullptr);
 			vkDestroyShaderModule(m_device, meshFragShader, nullptr);
-			m_mainDeletionQueue.push_function([&]()
-				{
-					//vkDestroyPipelineLayout(m_device, m_meshPipelineLayout, nullptr);
-					//vkDestroyPipeline(m_device, m_meshPipeline, nullptr);
-				});
 		}
 	}
 
@@ -797,12 +945,24 @@ namespace Moon
 		vmaUnmapMemory(m_allocator, mesh.m_vertexBuffer.allocation);
 	}
 
-	void DescriptorLayoutBuilder::addBinding(uint32_t binding, VkDescriptorType type)
+	size_t RenderDevice::padUniformBufferSize(size_t originalSize)
+	{
+		size_t minUboAlignment = m_gpuProperties.limits.minUniformBufferOffsetAlignment;
+		size_t alignedSize = originalSize;
+		if (minUboAlignment > 0)
+		{
+			alignedSize = (alignedSize + minUboAlignment - 1) & ~(minUboAlignment - 1);
+		}
+		return alignedSize;
+	}
+
+	void DescriptorLayoutBuilder::addBinding(uint32_t binding, VkDescriptorType type, VkShaderStageFlags shaderStages)
 	{
 		VkDescriptorSetLayoutBinding newbind{};
 		newbind.binding = binding;
 		newbind.descriptorCount = 1;
 		newbind.descriptorType = type;
+		newbind.stageFlags = shaderStages;
 		bindings.push_back(newbind);
 	}
 
@@ -811,13 +971,8 @@ namespace Moon
 		bindings.clear();
 	}
 
-	VkDescriptorSetLayout DescriptorLayoutBuilder::build(VkDevice device, VkShaderStageFlags shaderStages)
+	VkDescriptorSetLayout DescriptorLayoutBuilder::build(VkDevice device)
 	{
-		for (auto& b : bindings)
-		{
-			b.stageFlags |= shaderStages;
-		}
-
 		VkDescriptorSetLayoutCreateInfo info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
 		info.pBindings = bindings.data();
 		info.bindingCount = (uint32_t)bindings.size();

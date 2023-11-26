@@ -67,6 +67,27 @@ namespace Moon
 		}
 	};
 
+	struct GPUCameraData
+	{
+		glm::mat4 view;
+		glm::mat4 proj;
+		glm::mat4 viewproj;
+	};
+
+	struct GPUSceneData
+	{
+		glm::vec4 fogColor; // w is for exponent
+		glm::vec4 fogDistances; //x for min, y for max, zw unused.
+		glm::vec4 ambientColor;
+		glm::vec4 sunlightDirection; //w for sun power
+		glm::vec4 sunlightColor;
+	};
+
+	struct GPUObjectData
+	{
+		glm::mat4 modelMatrix;
+	};
+
 	struct FrameData
 	{
 		VkSemaphore presentSemaphore, renderSemaphore;
@@ -76,15 +97,21 @@ namespace Moon
 		VkCommandBuffer mainCommandBuffer;
 
 		DeletionQueue deletionQueue;
+
+		AllocatedBuffer cameraBuffer;
+		VkDescriptorSet globalDescriptor;
+
+		AllocatedBuffer objectBuffer;
+		VkDescriptorSet objectDescriptor;
 	};
 
 	struct DescriptorLayoutBuilder
 	{
 		std::vector<VkDescriptorSetLayoutBinding> bindings;
 
-		void addBinding(uint32_t binding, VkDescriptorType type);
+		void addBinding(uint32_t binding, VkDescriptorType type, VkShaderStageFlags shaderStages);
 		void clear();
-		VkDescriptorSetLayout build(VkDevice device, VkShaderStageFlags shaderStages);
+		VkDescriptorSetLayout build(VkDevice device);
 	};
 
 	struct DescriptorAllocator
@@ -121,6 +148,8 @@ namespace Moon
 		Material* getMaterial(const std::string& name);
 		Mesh* getMesh(const std::string& name);
 
+		AllocatedBuffer createBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
+
 	private:
 		void initVulkan();
 		void initSwapchain();
@@ -138,6 +167,7 @@ namespace Moon
 
 		bool loadShaderModule(const char* filePath, VkShaderModule* shaderModule);
 		void uploadMesh(Mesh& mesh);
+		size_t padUniformBufferSize(size_t originalSize);
 
 	private:
 		bool m_isInitialized{ false };
@@ -157,6 +187,7 @@ namespace Moon
 		VmaAllocator m_allocator;
 		FrameData m_frames[FRAME_OVERLAP];
 		DeletionQueue m_mainDeletionQueue;
+		VkPhysicalDeviceProperties m_gpuProperties;
 
 		// Swapchain
 		VkSwapchainKHR m_swapchain;
@@ -167,6 +198,9 @@ namespace Moon
 		DescriptorAllocator m_globalDescriptorAllocator;
 		VkDescriptorSetLayout m_drawImageDescriptorLayout;
 		VkDescriptorSet m_drawImageDescriptorSet;
+
+		VkDescriptorSetLayout m_globalSetLayout;
+		VkDescriptorSetLayout m_objectSetLayout;
 
 		// Immediate Submit structures
 		VkFence m_immFence;
@@ -185,6 +219,8 @@ namespace Moon
 		std::vector<RenderObject> m_renderables;
 		std::unordered_map<std::string, Material> m_materials;
 		std::unordered_map<std::string, Mesh> m_meshes;
+		GPUSceneData m_sceneParameters;
+		AllocatedBuffer m_sceneParameterBuffer;
 
 		// TEMP: For Compute Gradient
 		VkPipeline m_gradientPipeline;

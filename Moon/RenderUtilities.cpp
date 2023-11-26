@@ -133,6 +133,16 @@ VkSamplerCreateInfo Moon::samplerCreateInfo(VkFilter filters, VkSamplerAddressMo
 	return info;
 }
 
+VkDescriptorSetLayoutBinding Moon::descriptorSetLayoutBinding(VkDescriptorType type, VkShaderStageFlags stageFlags, uint32_t binding)
+{
+	VkDescriptorSetLayoutBinding setbind = {};
+	setbind.binding = binding;
+	setbind.descriptorCount = 1;
+	setbind.descriptorType = type;
+	setbind.stageFlags = stageFlags;
+	return setbind;
+}
+
 VkWriteDescriptorSet Moon::writeDescriptorBuffer(VkDescriptorType type, VkDescriptorSet dstSet, VkDescriptorBufferInfo* bufferInfo, uint32_t binding)
 {
 	VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
