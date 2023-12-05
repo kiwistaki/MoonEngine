@@ -1,5 +1,6 @@
 ﻿#include "RenderDevice.h"
 
+#include <array>
 #include <iostream>
 #include <fstream>
 
@@ -124,7 +125,7 @@ namespace Moon
 		{
 			transitionImage(cmd, m_drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 
-			drawMain(cmd);
+			drawImpl(cmd);
 
 			transitionImage(cmd, m_drawImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 			transitionImage(cmd, m_swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -158,43 +159,35 @@ namespace Moon
 		m_frameNumber++;
 	}
 
-	void RenderDevice::drawMain(VkCommandBuffer cmd)
+	void RenderDevice::drawImpl(VkCommandBuffer cmd)
 	{
 		// Compute Gradient
-		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gradientPipeline);
-		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gradientPipelineLayout, 0, 1, &m_drawImageDescriptorSet, 0, nullptr);	
-		vkCmdPushConstants(cmd, m_gradientPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &m_gradientPipelinePushConstant);
-		vkCmdDispatch(cmd, (uint32_t)std::ceil(m_windowExtent.width / 16.0), (uint32_t)std::ceil(m_windowExtent.height / 16.0), 1);
+		drawBackground(cmd);
 
 		// Draw Mesh
-		VkRenderingAttachmentInfoKHR colorAttachment{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR };
-		colorAttachment.imageView = m_drawImage.imageView;
-		colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-		colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-		colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		colorAttachment.clearValue.color = { 0.0f,0.0f,0.0f,0.0f };
+		drawMeshes(cmd);
+	}
 
-		VkRenderingAttachmentInfoKHR depthAttachment{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR };
-		depthAttachment.imageView = m_depthImage.imageView;
-		depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-		depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-		depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-		depthAttachment.clearValue.depthStencil.depth = { 1.0f };
+	void RenderDevice::drawBackground(VkCommandBuffer cmd)
+	{
+		vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gradientPipeline);
+		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_gradientPipelineLayout, 0, 1, &m_drawImageDescriptorSet, 0, nullptr);
+		vkCmdPushConstants(cmd, m_gradientPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePushConstants), &m_gradientPipelinePushConstant);
+		vkCmdDispatch(cmd, (uint32_t)std::ceil(m_windowExtent.width / 16.0), (uint32_t)std::ceil(m_windowExtent.height / 16.0), 1);
+	}
 
-		VkRenderingInfoKHR renderingInfo{ VK_STRUCTURE_TYPE_RENDERING_INFO_KHR };
-		renderingInfo.renderArea = { 0, 0, m_windowExtent.width, m_windowExtent.height };
-		renderingInfo.layerCount = 1;
-		renderingInfo.colorAttachmentCount = 1;
-		renderingInfo.pColorAttachments = &colorAttachment;
-		renderingInfo.pDepthAttachment = &depthAttachment;
-		renderingInfo.pStencilAttachment = VK_NULL_HANDLE;
+	void RenderDevice::drawMeshes(VkCommandBuffer cmd)
+	{
+		VkRenderingAttachmentInfo colorAttachment = Moon::attachmentInfo(m_drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+		VkRenderingAttachmentInfo depthAttachment = Moon::depthAttachmentInfo(m_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+		VkRenderingInfo renderingInfo = Moon::renderingInfo(m_windowExtent, &colorAttachment, &depthAttachment);
 
 		vkCmdBeginRenderingKHR(cmd, &renderingInfo);
 		{
 			VkViewport viewport = {};
 			viewport.x = 0;
 			viewport.y = 0;
-			viewport.width  = static_cast<float>(m_windowExtent.width);
+			viewport.width = static_cast<float>(m_windowExtent.width);
 			viewport.height = static_cast<float>(m_windowExtent.height);
 			viewport.minDepth = 0.f;
 			viewport.maxDepth = 1.f;
@@ -208,6 +201,18 @@ namespace Moon
 			vkCmdSetScissor(cmd, 0, 1, &scissor);
 
 			drawRenderObjects(cmd, m_renderables.data(), static_cast<int>(m_renderables.size()));
+
+			// TEMP: Rectangle
+			{
+				GPUDrawPushConstants push_constants;
+				push_constants.worldMatrix = glm::mat4{ 1.f };
+				push_constants.vertexBuffer = m_rectangle.vertexBufferAddress;
+
+				vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
+				vkCmdPushConstants(cmd, m_meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
+				vkCmdBindIndexBuffer(cmd, m_rectangle.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
+			}
 		}
 		vkCmdEndRenderingKHR(cmd);
 	}
@@ -415,10 +420,71 @@ namespace Moon
 
 		VmaAllocationCreateInfo vmaallocInfo = {};
 		vmaallocInfo.usage = memoryUsage;
+		vmaallocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 		AllocatedBuffer newBuffer;
-		VK_CHECK(vmaCreateBuffer(m_allocator, &bufferInfo, &vmaallocInfo, &newBuffer.buffer, &newBuffer.allocation, nullptr));
+		VK_CHECK(vmaCreateBuffer(m_allocator, &bufferInfo, &vmaallocInfo, &newBuffer.buffer, &newBuffer.allocation, &newBuffer.info));
 		return newBuffer;
+	}
+
+	AllocatedImage RenderDevice::createImage(VkExtent3D size, VkFormat format, VkImageUsageFlags usage)
+	{
+		AllocatedImage newImage;
+		newImage.imageFormat = format;
+		newImage.imageExtent = size;
+		VkImageCreateInfo img_info = imageCreateInfo(format, usage, size);
+
+		VmaAllocationCreateInfo allocinfo = {};
+		allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		VK_CHECK(vmaCreateImage(m_allocator, &img_info, &allocinfo, &newImage.image, &newImage.allocation, nullptr));
+
+		VkImageAspectFlags aspectFlag = VK_IMAGE_ASPECT_COLOR_BIT;
+		if (format == VK_FORMAT_D32_SFLOAT)
+		{
+			aspectFlag = VK_IMAGE_ASPECT_DEPTH_BIT;
+		}
+
+		VkImageViewCreateInfo view_info = imageviewCreateInfo(format, newImage.image, aspectFlag);
+		VK_CHECK(vkCreateImageView(m_device, &view_info, nullptr, &newImage.imageView));
+		return newImage;
+	}
+
+	AllocatedImage RenderDevice::createImage(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage)
+	{
+		size_t data_size = size.depth * size.width * size.height * 4;
+		AllocatedBuffer uploadbuffer = createBuffer(data_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+		memcpy(uploadbuffer.info.pMappedData, data, data_size);
+
+		AllocatedImage new_image = createImage(size, format, usage | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+
+		immediateSubmit([&](VkCommandBuffer cmd)
+		{
+			transitionImage(cmd, new_image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+			VkBufferImageCopy copyRegion = {};
+			copyRegion.bufferOffset = 0;
+			copyRegion.bufferRowLength = 0;
+			copyRegion.bufferImageHeight = 0;
+
+			copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			copyRegion.imageSubresource.mipLevel = 0;
+			copyRegion.imageSubresource.baseArrayLayer = 0;
+			copyRegion.imageSubresource.layerCount = 1;
+			copyRegion.imageExtent = size;
+
+			// copy the buffer into the image
+			vkCmdCopyBufferToImage(cmd, uploadbuffer.buffer, new_image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+				&copyRegion);
+
+			transitionImage(cmd, new_image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		});
+
+		vmaDestroyBuffer(m_allocator, uploadbuffer.buffer, uploadbuffer.allocation);
+
+		return new_image;
 	}
 
 	void RenderDevice::initVulkan()
@@ -443,6 +509,9 @@ namespace Moon
 		VkPhysicalDeviceVulkan13Features features13{};
 		features13.dynamicRendering = true;
 		features13.synchronization2 = true;
+		
+		VkPhysicalDeviceVulkan12Features features12{};
+		features12.bufferDeviceAddress = true;
 
 		vkb::PhysicalDeviceSelector selector{ vkb_inst };
 		vkb::PhysicalDevice physicalDevice = selector
@@ -453,6 +522,7 @@ namespace Moon
 			.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
 			.set_minimum_version(1, 3)
 			.set_required_features_13(features13)
+			.set_required_features_12(features12)
 			.set_surface(m_surface)
 			.select()
 			.value();
@@ -475,6 +545,7 @@ namespace Moon
 		allocatorInfo.physicalDevice = m_physicalDevice;
 		allocatorInfo.device = m_device;
 		allocatorInfo.instance = m_instance;
+		allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 		vmaCreateAllocator(&allocatorInfo, &m_allocator);
 		m_mainDeletionQueue.push_function([&]() 
 			{
@@ -630,12 +701,9 @@ namespace Moon
 					vkDestroySampler(m_device, blockySampler, nullptr);
 				});
 
-			VkDescriptorImageInfo imageBufferInfo;
-			imageBufferInfo.sampler = blockySampler;
-			imageBufferInfo.imageView = m_drawImage.imageView;
-			imageBufferInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-			VkWriteDescriptorSet texture1 = writeDescriptorImage(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, m_drawImageDescriptorSet, &imageBufferInfo, 0);
-			vkUpdateDescriptorSets(m_device, 1, &texture1, 0, nullptr);
+			DescriptorWriter writer;
+			writer.writeImage(0, m_drawImage.imageView, blockySampler, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+			writer.updateSet(m_device, m_drawImageDescriptorSet);
 		}
 
 		// Descriptor Set Global
@@ -688,119 +756,27 @@ namespace Moon
 			const int MAX_OBJECTS = 10000;
 			m_frames[i].objectBuffer = createBuffer(sizeof(GPUObjectData) * MAX_OBJECTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
 
-			VkDescriptorBufferInfo cameraInfo;
-			cameraInfo.buffer = m_frames[i].cameraBuffer.buffer;
-			cameraInfo.offset = 0;
-			cameraInfo.range = sizeof(GPUCameraData);
+			DescriptorWriter writer;
+			writer.writeBuffer(0, m_frames[i].cameraBuffer.buffer, sizeof(GPUCameraData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+			writer.writeBuffer(1, m_sceneParameterBuffer.buffer, sizeof(GPUSceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
+			writer.updateSet(m_device, m_frames[i].globalDescriptor);
+			writer.clear();
+			writer.writeBuffer(0, m_frames[i].objectBuffer.buffer, sizeof(GPUObjectData)* MAX_OBJECTS, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+			writer.updateSet(m_device, m_frames[i].objectDescriptor);
 
-			VkDescriptorBufferInfo sceneInfo;
-			sceneInfo.buffer = m_sceneParameterBuffer.buffer;
-			sceneInfo.offset = 0;
-			sceneInfo.range = sizeof(GPUSceneData);
-
-			VkDescriptorBufferInfo objectBufferInfo;
-			objectBufferInfo.buffer = m_frames[i].objectBuffer.buffer;
-			objectBufferInfo.offset = 0;
-			objectBufferInfo.range = sizeof(GPUObjectData) * MAX_OBJECTS;
-
-			VkWriteDescriptorSet cameraWrite = writeDescriptorBuffer(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, m_frames[i].globalDescriptor, &cameraInfo, 0);
-			VkWriteDescriptorSet sceneWrite = writeDescriptorBuffer(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, m_frames[i].globalDescriptor, &sceneInfo, 1);
-			VkWriteDescriptorSet objectWrite = writeDescriptorBuffer(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, m_frames[i].objectDescriptor, &objectBufferInfo, 0);
-			VkWriteDescriptorSet setWrites[] = { cameraWrite, sceneWrite, objectWrite };
-			vkUpdateDescriptorSets(m_device, 3, setWrites, 0, nullptr);
 		}	
 	}
 
 	void RenderDevice::initPipelines()
 	{
 		// TEMP: For compute gradient
-		{
-			VkPushConstantRange pushConstantRange;
-			pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-			pushConstantRange.offset = 0;
-			pushConstantRange.size = sizeof(ComputePushConstants);
+		initGradientPipeline();
 
-			VkPipelineLayoutCreateInfo computeLayout{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-			computeLayout.pSetLayouts = &m_drawImageDescriptorLayout;
-			computeLayout.setLayoutCount = 1;
-			computeLayout.pushConstantRangeCount = 1;
-			computeLayout.pPushConstantRanges = &pushConstantRange;
-			VK_CHECK(vkCreatePipelineLayout(m_device, &computeLayout, nullptr, &m_gradientPipelineLayout));
+		// TEMP: For Default Mesh
+		initDefaultMeshPipeline();
 
-			VkShaderModule computeDrawShader;
-			if (!loadShaderModule("../../Shaders/colorGradient.comp.spv", &computeDrawShader))
-			{
-				std::cout << "Error when building the compute shader" << std::endl;
-			}
-
-			VkPipelineShaderStageCreateInfo stageinfo{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-			stageinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-			stageinfo.module = computeDrawShader;
-			stageinfo.pName = "main";
-
-			VkComputePipelineCreateInfo computePipelineCreateInfo{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
-			computePipelineCreateInfo.layout = m_gradientPipelineLayout;
-			computePipelineCreateInfo.stage = stageinfo;
-			VK_CHECK(vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &computePipelineCreateInfo, nullptr, &m_gradientPipeline));
-
-			vkDestroyShaderModule(m_device, computeDrawShader, nullptr);
-			m_mainDeletionQueue.push_function([&]()
-				{
-					vkDestroyPipelineLayout(m_device, m_gradientPipelineLayout, nullptr);
-					vkDestroyPipeline(m_device, m_gradientPipeline, nullptr);
-				});
-		}
-
-		// TEMP: For Mesh
-		{
-			VkPushConstantRange push_constant;
-			push_constant.offset = 0;
-			push_constant.size = sizeof(MeshPushConstants);
-			push_constant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-
-			VkDescriptorSetLayout setLayouts[] = { m_globalSetLayout, m_objectSetLayout };
-
-			VkPipelineLayoutCreateInfo pipeline_layout_info = pipelineLayoutCreateInfo();
-			pipeline_layout_info.pPushConstantRanges = &push_constant;
-			pipeline_layout_info.pushConstantRangeCount = 1;
-			pipeline_layout_info.setLayoutCount = 2;
-			pipeline_layout_info.pSetLayouts = setLayouts;
-
-			VkPipelineLayout meshPipelineLayout;
-			VK_CHECK(vkCreatePipelineLayout(m_device, &pipeline_layout_info, nullptr, &meshPipelineLayout));
-
-			VkShaderModule meshVertexShader;
-			VkShaderModule meshFragShader;
-			if (!loadShaderModule("../../Shaders/mesh.vert.spv", &meshVertexShader))
-			{
-				std::cout << "Error when building the triangle vert shader" << std::endl;
-			}
-			if (!loadShaderModule("../../Shaders/mesh.frag.spv", &meshFragShader))
-			{
-				std::cout << "Error when building the triangle frag shader" << std::endl;
-			}
-
-			VertexInputDescription vertexDescription = Vertex::getVertexDescription();
-			PipelineBuilder pipelineBuilder;
-			pipelineBuilder.setShaders(meshVertexShader, meshFragShader);
-			pipelineBuilder.setVertexInputInfo(vertexDescription);
-			pipelineBuilder.setPipelineLayout(meshPipelineLayout);
-			pipelineBuilder.setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-			pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
-			pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
-			pipelineBuilder.setMultisamplingNone();
-			pipelineBuilder.disableBlending();
-			pipelineBuilder.enableDepthTest(true, true, VK_COMPARE_OP_LESS_OR_EQUAL);
-			pipelineBuilder.setColorAttachmentFormat(m_drawImage.imageFormat);
-			pipelineBuilder.setDepthFormat(m_depthImage.imageFormat);
-			VkPipeline meshPipeline;
-			meshPipeline = pipelineBuilder.buildPipeline(m_device);
-
-			createMaterial(std::move(meshPipeline), std::move(meshPipelineLayout), "DefaultMesh");
-
-			vkDestroyShaderModule(m_device, meshVertexShader, nullptr);
-			vkDestroyShaderModule(m_device, meshFragShader, nullptr);
-		}
+		// TEMP: For GLTF Mesh
+		initMeshPipeline();
 	}
 
 	void RenderDevice::initRayTracing()
@@ -888,6 +864,175 @@ namespace Moon
 				m_renderables.push_back(monkey);
 			}
 		}
+
+		std::array<Vertex, 4> rect_vertices;
+		rect_vertices[0].position = { 0.5,-0.5, 0 };
+		rect_vertices[1].position = { 0.5,0.5, 0 };
+		rect_vertices[2].position = { -0.5,-0.5, 0 };
+		rect_vertices[3].position = { -0.5,0.5, 0 };
+		rect_vertices[0].color = { 0,0, 0,1 };
+		rect_vertices[1].color = { 0.5,0.5,0.5 ,1 };
+		rect_vertices[2].color = { 1,0, 0,1 };
+		rect_vertices[3].color = { 0,1, 0,1 };
+		rect_vertices[0].uv_x = 1;
+		rect_vertices[0].uv_y = 0;
+		rect_vertices[1].uv_x = 0;
+		rect_vertices[1].uv_y = 0;
+		rect_vertices[2].uv_x = 1;
+		rect_vertices[2].uv_y = 1;
+		rect_vertices[3].uv_x = 0;
+		rect_vertices[3].uv_y = 1;
+
+		std::array<uint32_t, 6> rect_indices;
+		rect_indices[0] = 0;
+		rect_indices[1] = 1;
+		rect_indices[2] = 2;
+		rect_indices[3] = 2;
+		rect_indices[4] = 1;
+		rect_indices[5] = 3;
+
+		m_rectangle = uploadMesh(rect_indices, rect_vertices);
+		m_mainDeletionQueue.push_function([&]()
+			{
+				vmaDestroyBuffer(m_allocator, m_rectangle.vertexBuffer.buffer, m_rectangle.vertexBuffer.allocation);
+				vmaDestroyBuffer(m_allocator, m_rectangle.indexBuffer.buffer, m_rectangle.indexBuffer.allocation);
+			});
+	}
+
+	void RenderDevice::initGradientPipeline()
+	{
+		VkPushConstantRange pushConstantRange;
+		pushConstantRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+		pushConstantRange.offset = 0;
+		pushConstantRange.size = sizeof(ComputePushConstants);
+
+		VkPipelineLayoutCreateInfo computeLayout{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
+		computeLayout.pSetLayouts = &m_drawImageDescriptorLayout;
+		computeLayout.setLayoutCount = 1;
+		computeLayout.pushConstantRangeCount = 1;
+		computeLayout.pPushConstantRanges = &pushConstantRange;
+		VK_CHECK(vkCreatePipelineLayout(m_device, &computeLayout, nullptr, &m_gradientPipelineLayout));
+
+		VkShaderModule computeDrawShader;
+		if (!loadShaderModule("../../Shaders/colorGradient.comp.spv", &computeDrawShader))
+		{
+			std::cout << "Error when building the compute shader" << std::endl;
+		}
+
+		VkPipelineShaderStageCreateInfo stageinfo{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+		stageinfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+		stageinfo.module = computeDrawShader;
+		stageinfo.pName = "main";
+
+		VkComputePipelineCreateInfo computePipelineCreateInfo{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+		computePipelineCreateInfo.layout = m_gradientPipelineLayout;
+		computePipelineCreateInfo.stage = stageinfo;
+		VK_CHECK(vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &computePipelineCreateInfo, nullptr, &m_gradientPipeline));
+
+		vkDestroyShaderModule(m_device, computeDrawShader, nullptr);
+		m_mainDeletionQueue.push_function([&]()
+			{
+				vkDestroyPipelineLayout(m_device, m_gradientPipelineLayout, nullptr);
+				vkDestroyPipeline(m_device, m_gradientPipeline, nullptr);
+			});
+	}
+
+	void RenderDevice::initDefaultMeshPipeline()
+	{
+		VkPushConstantRange push_constant;
+		push_constant.offset = 0;
+		push_constant.size = sizeof(MeshPushConstants);
+		push_constant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+		VkDescriptorSetLayout setLayouts[] = { m_globalSetLayout, m_objectSetLayout };
+
+		VkPipelineLayoutCreateInfo pipeline_layout_info = pipelineLayoutCreateInfo();
+		pipeline_layout_info.pPushConstantRanges = &push_constant;
+		pipeline_layout_info.pushConstantRangeCount = 1;
+		pipeline_layout_info.setLayoutCount = 2;
+		pipeline_layout_info.pSetLayouts = setLayouts;
+
+		VkPipelineLayout meshPipelineLayout;
+		VK_CHECK(vkCreatePipelineLayout(m_device, &pipeline_layout_info, nullptr, &meshPipelineLayout));
+
+		VkShaderModule meshVertexShader;
+		VkShaderModule meshFragShader;
+		if (!loadShaderModule("../../Shaders/mesh.vert.spv", &meshVertexShader))
+		{
+			std::cout << "Error when building the triangle vert shader" << std::endl;
+		}
+		if (!loadShaderModule("../../Shaders/mesh.frag.spv", &meshFragShader))
+		{
+			std::cout << "Error when building the triangle frag shader" << std::endl;
+		}
+
+		VertexInputDescription vertexDescription = Vertex::getVertexDescription();
+		PipelineBuilder pipelineBuilder;
+		pipelineBuilder.setShaders(meshVertexShader, meshFragShader);
+		pipelineBuilder.setVertexInputInfo(vertexDescription);
+		pipelineBuilder.setPipelineLayout(meshPipelineLayout);
+		pipelineBuilder.setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+		pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
+		pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+		pipelineBuilder.setMultisamplingNone();
+		pipelineBuilder.disableBlending();
+		pipelineBuilder.enableDepthTest(true, true, VK_COMPARE_OP_GREATER_OR_EQUAL);
+		pipelineBuilder.setColorAttachmentFormat(m_drawImage.imageFormat);
+		pipelineBuilder.setDepthFormat(m_depthImage.imageFormat);
+		VkPipeline meshPipeline;
+		meshPipeline = pipelineBuilder.buildPipeline(m_device);
+
+		createMaterial(std::move(meshPipeline), std::move(meshPipelineLayout), "DefaultMesh");
+
+		vkDestroyShaderModule(m_device, meshVertexShader, nullptr);
+		vkDestroyShaderModule(m_device, meshFragShader, nullptr);
+	}
+
+	void RenderDevice::initMeshPipeline()
+	{
+		VkShaderModule triangleFragShader;
+		if (!loadShaderModule("../../Shaders/triangle.frag.spv", &triangleFragShader))
+			std::cout << "Error when building the triangle fragment shader module" << std::endl;
+		else
+			std::cout << "Triangle fragment shader succesfully loaded" << std::endl;
+
+		VkShaderModule triangleVertexShader;
+		if (!loadShaderModule("../../Shaders/triangle.vert.spv", &triangleVertexShader))
+			std::cout << "Error when building the vertex shader module" << std::endl;
+		else
+			std::cout << "Triangle vertex shader succesfully loaded" << std::endl;
+
+		VkPushConstantRange bufferRange{};
+		bufferRange.offset = 0;
+		bufferRange.size = sizeof(GPUDrawPushConstants);
+		bufferRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+		VkPipelineLayoutCreateInfo pipeline_layout_info = pipelineLayoutCreateInfo();
+		pipeline_layout_info.pPushConstantRanges = &bufferRange;
+		pipeline_layout_info.pushConstantRangeCount = 1;
+		VK_CHECK(vkCreatePipelineLayout(m_device, &pipeline_layout_info, nullptr, &m_meshPipelineLayout));
+
+		PipelineBuilder pipelineBuilder;
+		pipelineBuilder.setPipelineLayout(m_meshPipelineLayout);
+		pipelineBuilder.setShaders(triangleVertexShader, triangleFragShader);
+		pipelineBuilder.setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+		pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
+		pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+		pipelineBuilder.setMultisamplingNone();
+		pipelineBuilder.disableBlending();
+		pipelineBuilder.enableDepthTest(true, true, VK_COMPARE_OP_GREATER_OR_EQUAL);
+		pipelineBuilder.setColorAttachmentFormat(m_drawImage.imageFormat);
+		pipelineBuilder.setDepthFormat(m_depthImage.imageFormat);
+		m_meshPipeline = pipelineBuilder.buildPipeline(m_device);
+
+		vkDestroyShaderModule(m_device, triangleFragShader, nullptr);
+		vkDestroyShaderModule(m_device, triangleVertexShader, nullptr);
+
+		m_mainDeletionQueue.push_function([&]()
+			{
+				vkDestroyPipelineLayout(m_device, m_meshPipelineLayout, nullptr);
+				vkDestroyPipeline(m_device, m_meshPipeline, nullptr);
+			});
 	}
 
 	FrameData& RenderDevice::getCurrentFrame()
@@ -945,6 +1090,54 @@ namespace Moon
 		vmaUnmapMemory(m_allocator, mesh.m_vertexBuffer.allocation);
 	}
 
+	GPUMeshBuffers RenderDevice::uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices)
+	{
+		const size_t vertexBufferSize = vertices.size() * sizeof(Vertex);
+		const size_t indexBufferSize = indices.size() * sizeof(uint32_t);
+
+		GPUMeshBuffers newSurface;
+		newSurface.vertexBuffer = createBuffer(vertexBufferSize, 
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+			VMA_MEMORY_USAGE_GPU_ONLY);
+		VkBufferDeviceAddressInfo deviceAdressInfo
+		{ 
+			.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, 
+			.buffer = newSurface.vertexBuffer.buffer 
+		};
+		newSurface.vertexBufferAddress = vkGetBufferDeviceAddress(m_device, &deviceAdressInfo);
+		newSurface.indexBuffer = createBuffer(indexBufferSize, 
+			VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VMA_MEMORY_USAGE_GPU_ONLY);
+
+		AllocatedBuffer staging = createBuffer(vertexBufferSize + indexBufferSize, 
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+			VMA_MEMORY_USAGE_CPU_ONLY);
+
+		void* data = staging.allocation->GetMappedData();
+		memcpy(data, vertices.data(), vertexBufferSize);
+		memcpy((char*)data + vertexBufferSize, indices.data(), indexBufferSize);
+
+		immediateSubmit([&](VkCommandBuffer cmd)
+			{
+				VkBufferCopy vertexCopy{ 0 };
+				vertexCopy.dstOffset = 0;
+				vertexCopy.srcOffset = 0;
+				vertexCopy.size = vertexBufferSize;
+
+				vkCmdCopyBuffer(cmd, staging.buffer, newSurface.vertexBuffer.buffer, 1, &vertexCopy);
+
+				VkBufferCopy indexCopy{ 0 };
+				indexCopy.dstOffset = 0;
+				indexCopy.srcOffset = vertexBufferSize;
+				indexCopy.size = indexBufferSize;
+
+				vkCmdCopyBuffer(cmd, staging.buffer, newSurface.indexBuffer.buffer, 1, &indexCopy);
+			});
+		vmaDestroyBuffer(m_allocator, staging.buffer, staging.allocation);
+
+		return newSurface;
+	}
+
 	size_t RenderDevice::padUniformBufferSize(size_t originalSize)
 	{
 		size_t minUboAlignment = m_gpuProperties.limits.minUniformBufferOffsetAlignment;
@@ -985,41 +1178,114 @@ namespace Moon
 
 	void DescriptorAllocator::initPool(VkDevice device, uint32_t maxSets, std::span<PoolSizeRatio> poolRatios)
 	{
-		std::vector<VkDescriptorPoolSize> poolSizes;
-		for (PoolSizeRatio ratio : poolRatios)
+		ratios.clear();
+
+		for (auto r : poolRatios)
 		{
-			poolSizes.push_back(VkDescriptorPoolSize{
-				.type = ratio.type,
-				.descriptorCount = uint32_t(ratio.ratio * maxSets)
-				});
+			ratios.push_back(r);
 		}
 
-		VkDescriptorPoolCreateInfo pool_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-		pool_info.maxSets = maxSets;
-		pool_info.poolSizeCount = (uint32_t)poolSizes.size();
-		pool_info.pPoolSizes = poolSizes.data();
-		vkCreateDescriptorPool(device, &pool_info, nullptr, &pool);
+		VkDescriptorPool newPool = createPool(device, maxSets, poolRatios);
+		setsPerPool = (uint32_t)(maxSets * 1.5);
+		readyPools.push_back(newPool);
 	}
 
 	void DescriptorAllocator::clearDescriptors(VkDevice device)
 	{
-		vkResetDescriptorPool(device, pool, 0);
+		for (auto p : readyPools)
+		{
+			vkResetDescriptorPool(device, p, 0);
+		}
+		for (auto p : fullPools)
+		{
+			vkResetDescriptorPool(device, p, 0);
+			readyPools.push_back(p);
+		}
+		fullPools.clear();
 	}
 
 	void DescriptorAllocator::destroyPool(VkDevice device)
 	{
-		vkDestroyDescriptorPool(device, pool, nullptr);
+		for (auto p : readyPools)
+		{
+			vkDestroyDescriptorPool(device, p, nullptr);
+		}
+		readyPools.clear();
+		for (auto p : fullPools)
+		{
+			vkDestroyDescriptorPool(device, p, nullptr);
+		}
+		fullPools.clear();
 	}
 
 	VkDescriptorSet DescriptorAllocator::allocate(VkDevice device, VkDescriptorSetLayout layout)
 	{
-		VkDescriptorSet descriptorSet;
+		VkDescriptorPool poolToUse = getPool(device);
+
 		VkDescriptorSetAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-		allocInfo.descriptorPool = pool;
+		allocInfo.descriptorPool = poolToUse;
 		allocInfo.descriptorSetCount = 1;
 		allocInfo.pSetLayouts = &layout;
-		vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet);
-		return descriptorSet;
+
+		VkDescriptorSet ds;
+		VkResult result = vkAllocateDescriptorSets(device, &allocInfo, &ds);
+
+		//allocation failed. Try again
+		if (result == VK_ERROR_OUT_OF_POOL_MEMORY || result == VK_ERROR_FRAGMENTED_POOL)
+		{
+			fullPools.push_back(poolToUse);
+			poolToUse = getPool(device);
+			allocInfo.descriptorPool = poolToUse;
+			VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &ds));
+		}
+
+		readyPools.push_back(poolToUse);
+		return ds;
+	}
+
+	VkDescriptorPool DescriptorAllocator::getPool(VkDevice device)
+	{
+		VkDescriptorPool newPool;
+		if (readyPools.size() != 0)
+		{
+			newPool = readyPools.back();
+			readyPools.pop_back();
+		}
+		else
+		{
+			//need to create a new pool
+			newPool = createPool(device, setsPerPool, ratios);
+
+			setsPerPool = (uint32_t)(setsPerPool * 1.5);
+			if (setsPerPool > 4092)
+			{
+				setsPerPool = 4092;
+			}
+		}
+
+		return newPool;
+	}
+
+	VkDescriptorPool DescriptorAllocator::createPool(VkDevice device, uint32_t setCount, std::span<PoolSizeRatio> poolRatios)
+	{
+		std::vector<VkDescriptorPoolSize> poolSizes;
+		for (PoolSizeRatio ratio : poolRatios)
+		{
+			poolSizes.push_back(VkDescriptorPoolSize
+				{
+				.type = ratio.type,
+				.descriptorCount = uint32_t(ratio.ratio * setCount)
+				});
+		}
+
+		VkDescriptorPoolCreateInfo pool_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+		pool_info.maxSets = setCount;
+		pool_info.poolSizeCount = (uint32_t)poolSizes.size();
+		pool_info.pPoolSizes = poolSizes.data();
+
+		VkDescriptorPool newPool;
+		vkCreateDescriptorPool(device, &pool_info, nullptr, &newPool);
+		return newPool;
 	}
 
 	PipelineBuilder::PipelineBuilder()
@@ -1164,5 +1430,55 @@ namespace Moon
 		m_depthStencil.back = {};
 		m_depthStencil.minDepthBounds = 0.f;
 		m_depthStencil.maxDepthBounds = 1.f;
+	}
+
+	void DescriptorWriter::writeImage(int binding, VkImageView image, VkSampler sampler, VkImageLayout layout, VkDescriptorType type)
+	{
+		VkDescriptorImageInfo& info = imageInfos.emplace_back(VkDescriptorImageInfo{
+				.sampler = sampler,
+				.imageView = image,
+				.imageLayout = layout
+			});
+
+		VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+		write.dstBinding = binding;
+		write.dstSet = VK_NULL_HANDLE;
+		write.descriptorCount = 1;
+		write.descriptorType = type;
+		write.pImageInfo = &info;
+
+		writes.push_back(write);
+	}
+
+	void DescriptorWriter::writeBuffer(int binding, VkBuffer buffer, size_t size, size_t offset, VkDescriptorType type)
+	{
+		VkDescriptorBufferInfo& info = bufferInfos.emplace_back(VkDescriptorBufferInfo{
+				.buffer = buffer,
+				.offset = offset,
+				.range = size
+			});
+
+		VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+		write.dstBinding = binding;
+		write.dstSet = VK_NULL_HANDLE;
+		write.descriptorCount = 1;
+		write.descriptorType = type;
+		write.pBufferInfo = &info;
+
+		writes.push_back(write);
+	}
+
+	void DescriptorWriter::clear()
+	{
+		imageInfos.clear();
+		writes.clear();
+		bufferInfos.clear();
+	}
+
+	void DescriptorWriter::updateSet(VkDevice device, VkDescriptorSet set)
+	{
+		for (VkWriteDescriptorSet& write : writes)
+			write.dstSet = set;
+		vkUpdateDescriptorSets(device, (uint32_t)writes.size(), writes.data(), 0, nullptr);
 	}
 }

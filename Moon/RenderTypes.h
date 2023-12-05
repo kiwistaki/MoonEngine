@@ -5,18 +5,26 @@
 
 #include <vk_mem_alloc.h>
 
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
+
 namespace Moon
 {
     struct AllocatedBuffer
     {
         VkBuffer buffer;
         VmaAllocation allocation;
+        VmaAllocationInfo info;
     };
 
     struct AllocatedImage
     {
         VkImage image;
         VkImageView imageView;
+        VkExtent3D imageExtent;
         VkFormat imageFormat;
         VmaAllocation allocation;
     };

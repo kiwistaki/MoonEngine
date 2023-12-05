@@ -179,15 +179,26 @@ VkRenderingAttachmentInfo Moon::attachmentInfo(VkImageView view, VkClearValue* c
 	return colorAttachment;
 }
 
-VkRenderingInfo Moon::renderingInfo(VkExtent2D windowExtent, VkRenderingAttachmentInfo* colorAttachment, VkRenderingAttachmentInfo* depthStencilAttachment)
+VkRenderingAttachmentInfo Moon::depthAttachmentInfo(VkImageView view, VkImageLayout layout)
+{
+	VkRenderingAttachmentInfo depthAttachment{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+	depthAttachment.imageView = view;
+	depthAttachment.imageLayout = layout;
+	depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	depthAttachment.clearValue.depthStencil.depth = 0.f;
+	return depthAttachment;
+}
+
+VkRenderingInfo Moon::renderingInfo(VkExtent2D renderExtent, VkRenderingAttachmentInfo* colorAttachment, VkRenderingAttachmentInfo* depthStencilAttachment)
 {
 	VkRenderingInfo renderingInfo{ VK_STRUCTURE_TYPE_RENDERING_INFO };
-	renderingInfo.renderArea = { 0, 0, windowExtent.width, windowExtent.height };
+	renderingInfo.renderArea = VkRect2D{ VkOffset2D { 0, 0 }, renderExtent };
 	renderingInfo.layerCount = 1;
 	renderingInfo.colorAttachmentCount = 1;
 	renderingInfo.pColorAttachments = colorAttachment;
 	renderingInfo.pDepthAttachment = depthStencilAttachment;
-	renderingInfo.pStencilAttachment = depthStencilAttachment;
+	renderingInfo.pStencilAttachment = nullptr; //depthStencilAttachment
 	return renderingInfo;
 }
 

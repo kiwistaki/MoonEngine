@@ -3,12 +3,9 @@
 #include "RenderImage.h"
 #include "RenderMesh.h"
 
-#include <vector>
 #include <deque>
 #include <functional>
-#include <span>
 #include <unordered_map>
-#include <string>
 
 #include <glm/glm.hpp>
 
@@ -116,20 +113,41 @@ namespace Moon
 
 	struct DescriptorAllocator
 	{
+	public:
 		struct PoolSizeRatio
 		{
 			VkDescriptorType type;
 			float ratio;
 		};
 
-		VkDescriptorPool pool;
-
 		void initPool(VkDevice device, uint32_t maxSets, std::span<PoolSizeRatio> poolRatios);
 		void clearDescriptors(VkDevice device);
 		void destroyPool(VkDevice device);
-
 		VkDescriptorSet allocate(VkDevice device, VkDescriptorSetLayout layout);
+
+	private:
+		VkDescriptorPool getPool(VkDevice device);
+		VkDescriptorPool createPool(VkDevice device, uint32_t setCount, std::span<PoolSizeRatio> poolRatios);
+
+		std::vector<PoolSizeRatio> ratios;
+		std::vector<VkDescriptorPool> fullPools;
+		std::vector<VkDescriptorPool> readyPools;
+		uint32_t setsPerPool;
 	};
+
+	struct DescriptorWriter
+	{
+		std::deque<VkDescriptorImageInfo> imageInfos;
+		std::deque<VkDescriptorBufferInfo> bufferInfos;
+		std::vector<VkWriteDescriptorSet> writes;
+
+		void writeImage(int binding, VkImageView image, VkSampler sampler, VkImageLayout layout, VkDescriptorType type);
+		void writeBuffer(int binding, VkBuffer buffer, size_t size, size_t offset, VkDescriptorType type);
+
+		void clear();
+		void updateSet(VkDevice device, VkDescriptorSet set);
+	};
+
 
 	class RenderDevice
 	{
@@ -137,7 +155,9 @@ namespace Moon
 		void init();
 		void cleanup();
 		void draw();
-		void drawMain(VkCommandBuffer cmd);
+		void drawImpl(VkCommandBuffer cmd);
+		void drawBackground(VkCommandBuffer cmd);
+		void drawMeshes(VkCommandBuffer cmd);
 		void drawRenderObjects(VkCommandBuffer cmd, RenderObject* first, int count);
 		void drawImgui(VkCommandBuffer cmd, VkImageView targetImageView);
 		void run();
@@ -149,6 +169,11 @@ namespace Moon
 		Mesh* getMesh(const std::string& name);
 
 		AllocatedBuffer createBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
+		AllocatedImage createImage(VkExtent3D size, VkFormat format, VkImageUsageFlags usage);
+		AllocatedImage createImage(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage);
+
+		void uploadMesh(Mesh& mesh);
+		GPUMeshBuffers uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices);
 
 	private:
 		void initVulkan();
@@ -162,11 +187,14 @@ namespace Moon
 		void loadMeshes();
 		void initScene();
 
+		//TEMP:
+		void initGradientPipeline();
+		void initDefaultMeshPipeline();
+		void initMeshPipeline();
 
 		FrameData& getCurrentFrame();
 
 		bool loadShaderModule(const char* filePath, VkShaderModule* shaderModule);
-		void uploadMesh(Mesh& mesh);
 		size_t padUniformBufferSize(size_t originalSize);
 
 	private:
@@ -221,6 +249,11 @@ namespace Moon
 		std::unordered_map<std::string, Mesh> m_meshes;
 		GPUSceneData m_sceneParameters;
 		AllocatedBuffer m_sceneParameterBuffer;
+
+		//TEMP: Mesh pipeline
+		VkPipelineLayout m_meshPipelineLayout;
+		VkPipeline m_meshPipeline;
+		GPUMeshBuffers m_rectangle;
 
 		// TEMP: For Compute Gradient
 		VkPipeline m_gradientPipeline;
