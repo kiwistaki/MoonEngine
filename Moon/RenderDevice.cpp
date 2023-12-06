@@ -67,6 +67,7 @@ namespace Moon
 		//Temp
 		m_gradientPipelinePushConstant.data1 = glm::vec4(1.0, 1.0, 1.0, 0.0);
 		m_gradientPipelinePushConstant.data2 = glm::vec4(0.0, 0.0, 0.0, 0.0);
+		m_meshIndex = 2;
 
 		//everything went fine
 		m_isInitialized = true;
@@ -127,7 +128,7 @@ namespace Moon
 
 			drawImpl(cmd);
 
-			transitionImage(cmd, m_drawImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+			transitionImage(cmd, m_drawImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 			transitionImage(cmd, m_swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
 			VkExtent3D extent;
@@ -164,6 +165,9 @@ namespace Moon
 		// Compute Gradient
 		drawBackground(cmd);
 
+		transitionImage(cmd, m_drawImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+		transitionImage(cmd, m_depthImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
+
 		// Draw Mesh
 		drawMeshes(cmd);
 	}
@@ -178,11 +182,12 @@ namespace Moon
 
 	void RenderDevice::drawMeshes(VkCommandBuffer cmd)
 	{
-		VkRenderingAttachmentInfo colorAttachment = Moon::attachmentInfo(m_drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+		//VkClearValue clearValue{ .color = VkClearColorValue {0.1f, 0.1f, 0.1f, 1.0f} };
+		VkRenderingAttachmentInfo colorAttachment = Moon::attachmentInfo(m_drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);//VK_IMAGE_LAYOUT_GENERAL?
 		VkRenderingAttachmentInfo depthAttachment = Moon::depthAttachmentInfo(m_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 		VkRenderingInfo renderingInfo = Moon::renderingInfo(m_windowExtent, &colorAttachment, &depthAttachment);
 
-		vkCmdBeginRenderingKHR(cmd, &renderingInfo);
+		vkCmdBeginRendering(cmd, &renderingInfo);
 		{
 			VkViewport viewport = {};
 			viewport.x = 0;
@@ -194,13 +199,11 @@ namespace Moon
 			vkCmdSetViewport(cmd, 0, 1, &viewport);
 
 			VkRect2D scissor = {};
-			scissor.offset.x = 0;
-			scissor.offset.y = 0;
-			scissor.extent.width = m_windowExtent.width;
-			scissor.extent.height = m_windowExtent.height;
+			scissor.offset = VkOffset2D{ 0,0 };
+			scissor.extent = m_windowExtent;
 			vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-			drawRenderObjects(cmd, m_renderables.data(), static_cast<int>(m_renderables.size()));
+			//drawRenderObjects(cmd, m_renderables.data(), static_cast<int>(m_renderables.size()));
 
 			// TEMP: Rectangle
 			{
@@ -212,9 +215,19 @@ namespace Moon
 				vkCmdPushConstants(cmd, m_meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
 				vkCmdBindIndexBuffer(cmd, m_rectangle.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
+
+				glm::mat4 view = glm::translate(glm::vec3{ 0,0,-5 });
+				glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)m_windowExtent.width / (float)m_windowExtent.height, 10000.f, 0.1f);
+				projection[1][1] *= -1;
+				push_constants.worldMatrix = projection * view;
+				push_constants.vertexBuffer = m_testMeshes[m_meshIndex]->meshBuffers.vertexBufferAddress;
+
+				vkCmdPushConstants(cmd, m_meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
+				vkCmdBindIndexBuffer(cmd, m_testMeshes[m_meshIndex]->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+				vkCmdDrawIndexed(cmd, m_testMeshes[m_meshIndex]->surfaces[0].count, 1, m_testMeshes[m_meshIndex]->surfaces[0].startIndex, 0, 0);
 			}
 		}
-		vkCmdEndRenderingKHR(cmd);
+		vkCmdEndRendering(cmd);
 	}
 
 	void RenderDevice::drawRenderObjects(VkCommandBuffer cmd, RenderObject* first, int count)
@@ -334,7 +347,7 @@ namespace Moon
 
 			//some imgui UI to test
 			{
-				if(!ImGui::Begin("ColorGradient"))
+				if(!ImGui::Begin("AppSettings"))
 				{
 					ImGui::End();
 				}
@@ -348,6 +361,10 @@ namespace Moon
 					ImGui::SameLine();
 					ImGui::ColorEdit4("BottomColor", (float*)&m_gradientPipelinePushConstant.data2, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
 
+
+					ImGui::Text("Mesh:");
+					ImGui::SameLine();
+					ImGui::SliderInt("MeshIndex", &m_meshIndex, 0, (int)(m_testMeshes.size() - 1));
 					ImGui::End();
 				}
 			}
@@ -512,14 +529,14 @@ namespace Moon
 		
 		VkPhysicalDeviceVulkan12Features features12{};
 		features12.bufferDeviceAddress = true;
+		features12.descriptorIndexing = true;
 
 		vkb::PhysicalDeviceSelector selector{ vkb_inst };
 		vkb::PhysicalDevice physicalDevice = selector
-			.add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)
-			.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
-			.add_required_extension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)
-			.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
-			.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
+			//.add_required_extension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
+			//.add_required_extension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)
+			//.add_required_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
+			//.add_required_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME)
 			.set_minimum_version(1, 3)
 			.set_required_features_13(features13)
 			.set_required_features_12(features12)
@@ -531,7 +548,9 @@ namespace Moon
 		shaderDrawParametersFeatures.shaderDrawParameters = VK_TRUE;
 
 		vkb::DeviceBuilder deviceBuilder{ physicalDevice };
-		vkb::Device vkbDevice = deviceBuilder.add_pNext(&shaderDrawParametersFeatures).build().value();
+		vkb::Device vkbDevice = deviceBuilder
+			.add_pNext(&shaderDrawParametersFeatures)
+			.build().value();
 		m_device = vkbDevice.device;
 		m_physicalDevice = physicalDevice.physical_device;
 		m_gpuProperties = vkbDevice.physical_device.properties;
@@ -557,7 +576,7 @@ namespace Moon
 	{
 		VkSurfaceFormatKHR desiredFormat{ VK_FORMAT_B8G8R8A8_UNORM , VK_COLOR_SPACE_SRGB_NONLINEAR_KHR };
 
-		vkb::SwapchainBuilder swapchainBuilder{ m_physicalDevice,m_device,m_surface };
+		vkb::SwapchainBuilder swapchainBuilder{ m_physicalDevice, m_device, m_surface };
 		vkb::Swapchain vkbSwapchain = swapchainBuilder
 			.set_desired_format(desiredFormat)
 			.set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
@@ -576,7 +595,7 @@ namespace Moon
 
 		VkImageUsageFlags drawImageUsages{};
 		drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-		drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		//drawImageUsages |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 		drawImageUsages |= VK_IMAGE_USAGE_STORAGE_BIT;
 		drawImageUsages |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 		VkImageCreateInfo rimg_info = imageCreateInfo(m_drawImage.imageFormat, drawImageUsages, drawImageExtent);
@@ -589,15 +608,8 @@ namespace Moon
 		VkImageViewCreateInfo view_info = imageviewCreateInfo(m_drawImage.imageFormat, m_drawImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
 		VK_CHECK(vkCreateImageView(m_device, &view_info, nullptr, &m_drawImage.imageView));
 
-		m_mainDeletionQueue.push_function([=]()
-			{
-				vkDestroyImageView(m_device, m_drawImage.imageView, nullptr);
-				vmaDestroyImage(m_allocator, m_drawImage.image, m_drawImage.allocation);
-			});
-
 		// Depth 
 		m_depthImage.imageFormat = VK_FORMAT_D32_SFLOAT;
-
 		VkImageCreateInfo dimg_info = imageCreateInfo(m_depthImage.imageFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, drawImageExtent);
 
 		VmaAllocationCreateInfo dimg_allocinfo = {};
@@ -605,11 +617,14 @@ namespace Moon
 		dimg_allocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 		vmaCreateImage(m_allocator, &dimg_info, &dimg_allocinfo, &m_depthImage.image, &m_depthImage.allocation, nullptr);
 
-		view_info = imageviewCreateInfo(m_depthImage.imageFormat, m_depthImage.image, VK_IMAGE_ASPECT_DEPTH_BIT);
-		VK_CHECK(vkCreateImageView(m_device, &view_info, nullptr, &m_depthImage.imageView));
+		VkImageViewCreateInfo dview_info = imageviewCreateInfo(m_depthImage.imageFormat, m_depthImage.image, VK_IMAGE_ASPECT_DEPTH_BIT);
+		VK_CHECK(vkCreateImageView(m_device, &dview_info, nullptr, &m_depthImage.imageView));
 
 		m_mainDeletionQueue.push_function([=]()
 			{
+				vkDestroyImageView(m_device, m_drawImage.imageView, nullptr);
+				vmaDestroyImage(m_allocator, m_drawImage.image, m_drawImage.allocation);
+
 				vkDestroyImageView(m_device, m_depthImage.imageView, nullptr);
 				vmaDestroyImage(m_allocator, m_depthImage.image, m_depthImage.allocation);
 			});
@@ -773,7 +788,7 @@ namespace Moon
 		initGradientPipeline();
 
 		// TEMP: For Default Mesh
-		initDefaultMeshPipeline();
+		//initDefaultMeshPipeline();
 
 		// TEMP: For GLTF Mesh
 		initMeshPipeline();
@@ -787,7 +802,8 @@ namespace Moon
 
 	void RenderDevice::initImgui()
 	{
-		VkDescriptorPoolSize pool_sizes[] = { { VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+		VkDescriptorPoolSize pool_sizes[] = { 
+			{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
 			{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
 			{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
 			{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
@@ -841,15 +857,15 @@ namespace Moon
 
 	void RenderDevice::loadMeshes()
 	{
-		Mesh monkey;
+		/*Mesh monkey;
 		monkey.loadFromObj("../../assets/monkey_smooth.obj");
 		uploadMesh(monkey);
-		m_meshes["monkey"] = std::move(monkey);
+		m_meshes["monkey"] = std::move(monkey);*/
 	}
 
 	void RenderDevice::initScene()
 	{
-		RenderObject monkey;
+		/*RenderObject monkey;
 		monkey.mesh = getMesh("monkey");
 		monkey.material = getMaterial("DefaultMesh");
 		monkey.transformMatrix = glm::mat4{ 1.0f };
@@ -863,7 +879,7 @@ namespace Moon
 				monkey.transformMatrix = translation * scale;
 				m_renderables.push_back(monkey);
 			}
-		}
+		}*/
 
 		std::array<Vertex, 4> rect_vertices;
 		rect_vertices[0].position = { 0.5,-0.5, 0 };
@@ -892,10 +908,19 @@ namespace Moon
 		rect_indices[5] = 3;
 
 		m_rectangle = uploadMesh(rect_indices, rect_vertices);
+
+		m_testMeshes = loadGltfMeshes(this, "..\\..\\Assets\\basicmesh.glb", true).value();
+
 		m_mainDeletionQueue.push_function([&]()
 			{
 				vmaDestroyBuffer(m_allocator, m_rectangle.vertexBuffer.buffer, m_rectangle.vertexBuffer.allocation);
 				vmaDestroyBuffer(m_allocator, m_rectangle.indexBuffer.buffer, m_rectangle.indexBuffer.allocation);
+				for (size_t i = 0; i < m_testMeshes.size(); ++i)
+				{
+					auto mesh = m_testMeshes[i]->meshBuffers;
+					vmaDestroyBuffer(m_allocator, mesh.vertexBuffer.buffer, mesh.vertexBuffer.allocation);
+					vmaDestroyBuffer(m_allocator, mesh.indexBuffer.buffer, mesh.indexBuffer.allocation);
+				}
 			});
 	}
 
@@ -976,7 +1001,7 @@ namespace Moon
 		pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
 		pipelineBuilder.setMultisamplingNone();
 		pipelineBuilder.disableBlending();
-		pipelineBuilder.enableDepthTest(true, true, VK_COMPARE_OP_GREATER_OR_EQUAL);
+		pipelineBuilder.enableDepthTest(true, VK_COMPARE_OP_GREATER_OR_EQUAL);
 		pipelineBuilder.setColorAttachmentFormat(m_drawImage.imageFormat);
 		pipelineBuilder.setDepthFormat(m_depthImage.imageFormat);
 		VkPipeline meshPipeline;
@@ -1020,7 +1045,7 @@ namespace Moon
 		pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
 		pipelineBuilder.setMultisamplingNone();
 		pipelineBuilder.disableBlending();
-		pipelineBuilder.enableDepthTest(true, true, VK_COMPARE_OP_GREATER_OR_EQUAL);
+		pipelineBuilder.enableDepthTest(true, VK_COMPARE_OP_GREATER_OR_EQUAL);
 		pipelineBuilder.setColorAttachmentFormat(m_drawImage.imageFormat);
 		pipelineBuilder.setDepthFormat(m_depthImage.imageFormat);
 		m_meshPipeline = pipelineBuilder.buildPipeline(m_device);
@@ -1123,19 +1148,23 @@ namespace Moon
 				vertexCopy.dstOffset = 0;
 				vertexCopy.srcOffset = 0;
 				vertexCopy.size = vertexBufferSize;
-
 				vkCmdCopyBuffer(cmd, staging.buffer, newSurface.vertexBuffer.buffer, 1, &vertexCopy);
 
 				VkBufferCopy indexCopy{ 0 };
 				indexCopy.dstOffset = 0;
 				indexCopy.srcOffset = vertexBufferSize;
 				indexCopy.size = indexBufferSize;
-
 				vkCmdCopyBuffer(cmd, staging.buffer, newSurface.indexBuffer.buffer, 1, &indexCopy);
 			});
-		vmaDestroyBuffer(m_allocator, staging.buffer, staging.allocation);
+
+		destroyBuffer(staging);
 
 		return newSurface;
+	}
+
+	void RenderDevice::destroyBuffer(const AllocatedBuffer& buffer)
+	{
+		vmaDestroyBuffer(m_allocator, buffer.buffer, buffer.allocation);
 	}
 
 	size_t RenderDevice::padUniformBufferSize(size_t originalSize)
@@ -1295,7 +1324,7 @@ namespace Moon
 
 	void PipelineBuilder::clear()
 	{
-		m_vertexInputInfo = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+		//m_vertexInputInfo = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
 		m_inputAssembly = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
 		m_rasterizer = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
 		m_colorBlendAttachment = {};
@@ -1319,10 +1348,12 @@ namespace Moon
 		colorBlending.attachmentCount = 1;
 		colorBlending.pAttachments = &m_colorBlendAttachment;
 
+		VkPipelineVertexInputStateCreateInfo vertexInputInfo = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
 		VkGraphicsPipelineCreateInfo pipelineInfo = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+		pipelineInfo.pNext = &m_renderInfo;
 		pipelineInfo.stageCount = static_cast<uint32_t>(m_shaderStages.size());
 		pipelineInfo.pStages = m_shaderStages.data();
-		pipelineInfo.pVertexInputState = &m_vertexInputInfo;
+		pipelineInfo.pVertexInputState = &vertexInputInfo;
 		pipelineInfo.pInputAssemblyState = &m_inputAssembly;
 		pipelineInfo.pViewportState = &viewportState;
 		pipelineInfo.pRasterizationState = &m_rasterizer;
@@ -1330,9 +1361,6 @@ namespace Moon
 		pipelineInfo.pColorBlendState = &colorBlending;
 		pipelineInfo.pDepthStencilState = &m_depthStencil;
 		pipelineInfo.layout = m_pipelineLayout;
-		pipelineInfo.renderPass = VK_NULL_HANDLE;
-		pipelineInfo.subpass = 0;
-		pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
 		VkDynamicState state[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
 		VkPipelineDynamicStateCreateInfo dynamicInfo = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
@@ -1340,7 +1368,6 @@ namespace Moon
 		dynamicInfo.pDynamicStates = &state[0];
 		pipelineInfo.pDynamicState = &dynamicInfo;
 
-		pipelineInfo.pNext = &m_renderInfo;
 
 		VkPipeline newPipeline;
 		if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS)
@@ -1411,6 +1438,8 @@ namespace Moon
 	void PipelineBuilder::setColorAttachmentFormat(VkFormat format)
 	{
 		m_colorAttachmentformat = format;
+		m_renderInfo.colorAttachmentCount = 1;
+		m_renderInfo.pColorAttachmentFormats = &m_colorAttachmentformat;
 	}
 	
 	void PipelineBuilder::setDepthFormat(VkFormat format)
@@ -1418,12 +1447,24 @@ namespace Moon
 		m_renderInfo.depthAttachmentFormat = format;
 	}
 	
-	void PipelineBuilder::enableDepthTest(bool bDepthTest, bool bDepthWrite, VkCompareOp compareOp)
+	void PipelineBuilder::disableDepthTest()
 	{
-		m_depthStencil.depthTestEnable = bDepthTest ? VK_TRUE : VK_FALSE;
-		m_depthStencil.depthWriteEnable = bDepthWrite ? VK_TRUE : VK_FALSE;
-		m_depthStencil.depthCompareOp = bDepthTest ? compareOp : VK_COMPARE_OP_NEVER;
+		m_depthStencil.depthTestEnable = VK_FALSE;
+		m_depthStencil.depthWriteEnable = VK_FALSE;
+		m_depthStencil.depthCompareOp = VK_COMPARE_OP_NEVER;
+		m_depthStencil.depthBoundsTestEnable = VK_FALSE;
+		m_depthStencil.stencilTestEnable = VK_FALSE;
+		m_depthStencil.front = {};
+		m_depthStencil.back = {};
+		m_depthStencil.minDepthBounds = 0.f;
+		m_depthStencil.maxDepthBounds = 1.f;
+	}
 
+	void PipelineBuilder::enableDepthTest(bool bDepthWrite, VkCompareOp compareOp)
+	{
+		m_depthStencil.depthTestEnable = VK_TRUE;
+		m_depthStencil.depthWriteEnable = bDepthWrite;
+		m_depthStencil.depthCompareOp = compareOp;
 		m_depthStencil.depthBoundsTestEnable = VK_FALSE;
 		m_depthStencil.stencilTestEnable = VK_FALSE;
 		m_depthStencil.front = {};

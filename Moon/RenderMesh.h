@@ -64,6 +64,6 @@ namespace Moon
 
 	//Forward declaration
 	class RenderDevice;
-	std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(RenderDevice* device, std::filesystem::path filePath);
+	std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(RenderDevice* device, std::filesystem::path filePath, bool useNormalAsColor = false);
 
 }

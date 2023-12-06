@@ -101,17 +101,17 @@ namespace Moon
 		return true;
 	}
 
-	std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(RenderDevice* device, std::filesystem::path filePath)
+	std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(RenderDevice* device, std::filesystem::path filePath, bool useNormalAsColor)
 	{
 		std::cout << "Loading GLTF: " << filePath << std::endl;
-
-		constexpr auto gltfOptions = fastgltf::Options::LoadGLBBuffers | fastgltf::Options::LoadExternalBuffers;
 
 		fastgltf::GltfDataBuffer data;
 		data.loadFromFile(filePath);
 
 		fastgltf::Asset gltf;
-		fastgltf::Parser parser;
+		fastgltf::Parser parser{};
+		constexpr auto gltfOptions = fastgltf::Options::LoadGLBBuffers | fastgltf::Options::LoadExternalBuffers;
+
 		auto load = parser.loadBinaryGLTF(&data, filePath.parent_path(), gltfOptions);
 		if (load)
 		{
@@ -143,19 +143,17 @@ namespace Moon
 				size_t initial_vtx = vertices.size();
 				{
 					fastgltf::Accessor& indexaccessor = gltf.accessors[p.indicesAccessor.value()];
-
 					fastgltf::iterateAccessor<std::uint32_t>(gltf, indexaccessor, [&](std::uint32_t idx)
 						{
-						indices.push_back(idx + initial_vtx);
+							indices.push_back(idx + initial_vtx);
 						});
 				}
 
 				fastgltf::Accessor& posAccessor = gltf.accessors[p.findAttribute("POSITION")->second];
 
 				size_t vidx = initial_vtx;
-				fastgltf::iterateAccessor<glm::vec3>(gltf, posAccessor, [&](glm::vec3 v) 
-					{ 
-						vertices[vidx++].position = v;
+				fastgltf::iterateAccessor<glm::vec3>(gltf, posAccessor, [&](glm::vec3 v)
+					{
 						Vertex newvtx;
 						newvtx.position = v;
 						newvtx.normal = { 1,0,0 };
@@ -200,8 +198,16 @@ namespace Moon
 				newmesh.surfaces.push_back(newSubmesh);
 			}
 
-			newmesh.meshBuffers = device->uploadMesh(indices, vertices);
+			// Display normals as vertex colors for debugging
+			if (useNormalAsColor)
+			{
+				for (Vertex& vtx : vertices)
+				{
+					vtx.color = glm::vec4(vtx.normal, 1.f);
+				}
+			}
 
+			newmesh.meshBuffers = device->uploadMesh(indices, vertices);
 			meshes.emplace_back(std::make_shared<MeshAsset>(std::move(newmesh)));
 		}
 

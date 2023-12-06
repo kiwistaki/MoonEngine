@@ -174,6 +174,7 @@ namespace Moon
 
 		void uploadMesh(Mesh& mesh);
 		GPUMeshBuffers uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices);
+		void destroyBuffer(const AllocatedBuffer& buffer);
 
 	private:
 		void initVulkan();
@@ -254,6 +255,8 @@ namespace Moon
 		VkPipelineLayout m_meshPipelineLayout;
 		VkPipeline m_meshPipeline;
 		GPUMeshBuffers m_rectangle;
+		std::vector<std::shared_ptr<MeshAsset>> m_testMeshes;
+		int m_meshIndex;
 
 		// TEMP: For Compute Gradient
 		VkPipeline m_gradientPipeline;
@@ -279,7 +282,8 @@ namespace Moon
 		void disableBlending();
 		void setColorAttachmentFormat(VkFormat format);
 		void setDepthFormat(VkFormat format);
-		void enableDepthTest(bool bDepthTest, bool bDepthWrite, VkCompareOp compareOp);
+		void disableDepthTest();
+		void enableDepthTest(bool bDepthWrite, VkCompareOp compareOp);
 
 	public:
 		std::vector<VkPipelineShaderStageCreateInfo> m_shaderStages;
