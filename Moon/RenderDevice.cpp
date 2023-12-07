@@ -61,13 +61,7 @@ namespace Moon
 		initPipelines();
 		initRayTracing();
 		initImgui();
-		loadMeshes();
-		initScene();
-
-		//Temp
-		m_gradientPipelinePushConstant.data1 = glm::vec4(1.0, 1.0, 1.0, 0.0);
-		m_gradientPipelinePushConstant.data2 = glm::vec4(0.0, 0.0, 0.0, 0.0);
-		m_meshIndex = 2;
+		initDefaultData();
 
 		//everything went fine
 		m_isInitialized = true;
@@ -78,19 +72,7 @@ namespace Moon
 		{
 			vkDeviceWaitIdle(m_device);
 
-			for (int i = 0; i < FRAME_OVERLAP; i++)
-			{
-				vmaDestroyBuffer(m_allocator, m_frames[i].objectBuffer.buffer, m_frames[i].objectBuffer.allocation);
-				vmaDestroyBuffer(m_allocator, m_frames[i].cameraBuffer.buffer, m_frames[i].cameraBuffer.allocation);
-			}
-
 			m_mainDeletionQueue.flush();
-
-			for (auto material : m_materials)
-			{
-				vkDestroyPipeline(m_device, material.second.pipeline, nullptr);
-				vkDestroyPipelineLayout(m_device, material.second.pipelineLayout, nullptr);
-			}
 
 			//destroy swapchain resources
 			vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
@@ -203,113 +185,22 @@ namespace Moon
 			scissor.extent = m_windowExtent;
 			vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-			//drawRenderObjects(cmd, m_renderables.data(), static_cast<int>(m_renderables.size()));
-
-			// TEMP: Rectangle
 			{
-				GPUDrawPushConstants push_constants;
-				push_constants.worldMatrix = glm::mat4{ 1.f };
-				push_constants.vertexBuffer = m_rectangle.vertexBufferAddress;
-
-				vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
-				vkCmdPushConstants(cmd, m_meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
-				vkCmdBindIndexBuffer(cmd, m_rectangle.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-				vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
-
 				glm::mat4 view = glm::translate(glm::vec3{ 0,0,-5 });
 				glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)m_windowExtent.width / (float)m_windowExtent.height, 10000.f, 0.1f);
 				projection[1][1] *= -1;
+
+				GPUDrawPushConstants push_constants;
 				push_constants.worldMatrix = projection * view;
 				push_constants.vertexBuffer = m_testMeshes[m_meshIndex]->meshBuffers.vertexBufferAddress;
 
+				vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshPipeline);
 				vkCmdPushConstants(cmd, m_meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &push_constants);
 				vkCmdBindIndexBuffer(cmd, m_testMeshes[m_meshIndex]->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 				vkCmdDrawIndexed(cmd, m_testMeshes[m_meshIndex]->surfaces[0].count, 1, m_testMeshes[m_meshIndex]->surfaces[0].startIndex, 0, 0);
 			}
 		}
 		vkCmdEndRendering(cmd);
-	}
-
-	void RenderDevice::drawRenderObjects(VkCommandBuffer cmd, RenderObject* first, int count)
-	{
-		int frameIndex = m_frameNumber % FRAME_OVERLAP;
-
-		//Update Camera
-		{
-			glm::vec3 camPos = { 0.f,-6.f,-10.f };
-
-			glm::mat4 view = glm::translate(glm::mat4(1.f), camPos);
-			glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)m_windowExtent.width / (float)m_windowExtent.height, 0.1f, 200.0f);
-			projection[1][1] *= -1;
-
-			GPUCameraData camData;
-			camData.proj = projection;
-			camData.view = view;
-			camData.viewproj = projection * view;
-
-			void* data;
-			vmaMapMemory(m_allocator, getCurrentFrame().cameraBuffer.allocation, &data);
-			memcpy(data, &camData, sizeof(GPUCameraData));
-			vmaUnmapMemory(m_allocator, getCurrentFrame().cameraBuffer.allocation);
-		}
-
-		//Update Scene data
-		{
-			float framed = (m_frameNumber / 120.f);
-			m_sceneParameters.ambientColor = { sin(framed),0,cos(framed),1 };
-
-			char* sceneData;
-			vmaMapMemory(m_allocator, m_sceneParameterBuffer.allocation, (void**)&sceneData);	
-			sceneData += padUniformBufferSize(sizeof(GPUSceneData)) * frameIndex;
-			memcpy(sceneData, &m_sceneParameters, sizeof(GPUSceneData));
-			vmaUnmapMemory(m_allocator, m_sceneParameterBuffer.allocation);
-		}
-
-		// Update Object SSBO
-		{
-			void* objectData;
-			vmaMapMemory(m_allocator, getCurrentFrame().objectBuffer.allocation, &objectData);
-
-			GPUObjectData* objectSSBO = (GPUObjectData*)objectData;
-
-			for (int i = 0; i < count; i++)
-			{
-				RenderObject& object = first[i];
-				objectSSBO[i].modelMatrix = object.transformMatrix;
-			}
-
-			vmaUnmapMemory(m_allocator, getCurrentFrame().objectBuffer.allocation);
-		}
-
-		Mesh* lastMesh = nullptr;
-		Material* lastMaterial = nullptr;
-		for (int i = 0; i < count; i++)
-		{
-			RenderObject& object = first[i];
-
-			if (object.material != lastMaterial)
-			{
-				vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipeline);
-				lastMaterial = object.material;
-
-				uint32_t uniform_offset = (uint32_t)padUniformBufferSize(sizeof(GPUSceneData)) * frameIndex;
-				vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout, 0, 1, &getCurrentFrame().globalDescriptor, 1, &uniform_offset);
-
-				vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, object.material->pipelineLayout, 1, 1, &getCurrentFrame().objectDescriptor, 0, nullptr);
-			}
-
-			MeshPushConstants constants;
-			constants.renderMatrix = object.transformMatrix;
-			vkCmdPushConstants(cmd, object.material->pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MeshPushConstants), &constants);
-
-			if (object.mesh != lastMesh)
-			{
-				VkDeviceSize offset = 0;
-				vkCmdBindVertexBuffers(cmd, 0, 1, &object.mesh->m_vertexBuffer.buffer, &offset);
-				lastMesh = object.mesh;
-			}
-			vkCmdDraw(cmd, static_cast<uint32_t>(object.mesh->m_vertices.size()), 1, 0, i);
-		}
 	}
 
 	void RenderDevice::drawImgui(VkCommandBuffer cmd, VkImageView targetImageView)
@@ -392,41 +283,6 @@ namespace Moon
 		VkSubmitInfo2 submit = Moon::submitInfo(&cmdinfo, nullptr, nullptr);
 		VK_CHECK(vkQueueSubmit2(m_graphicsQueue, 1, &submit, m_immFence));
 		VK_CHECK(vkWaitForFences(m_device, 1, &m_immFence, true, 9999999999));
-	}
-
-	Material* RenderDevice::createMaterial(VkPipeline pipeline, VkPipelineLayout layout, const std::string& name)
-	{
-		Material mat;
-		mat.pipeline = pipeline;
-		mat.pipelineLayout = layout;
-		m_materials[name] = mat;
-		return &m_materials[name];
-	}
-
-	Material* RenderDevice::getMaterial(const std::string& name)
-	{
-		auto it = m_materials.find(name);
-		if (it == m_materials.end())
-		{
-			return nullptr;
-		}
-		else
-		{
-			return &(*it).second;
-		}
-	}
-
-	Mesh* RenderDevice::getMesh(const std::string& name)
-	{
-		auto it = m_meshes.find(name);
-		if (it == m_meshes.end())
-		{
-			return nullptr;
-		}
-		else
-		{
-			return &(*it).second;
-		}
 	}
 
 	AllocatedBuffer RenderDevice::createBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage)
@@ -720,75 +576,12 @@ namespace Moon
 			writer.writeImage(0, m_drawImage.imageView, blockySampler, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
 			writer.updateSet(m_device, m_drawImageDescriptorSet);
 		}
-
-		// Descriptor Set Global
-		{
-			DescriptorLayoutBuilder builder;
-			builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT);
-			builder.addBinding(1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-			m_globalSetLayout = builder.build(m_device);
-
-			for (int i = 0; i < FRAME_OVERLAP; i++)
-			{
-				m_frames[i].globalDescriptor = m_globalDescriptorAllocator.allocate(m_device, m_globalSetLayout);
-			}
-
-			m_mainDeletionQueue.push_function([&]()
-				{
-					vkDestroyDescriptorSetLayout(m_device, m_globalSetLayout, nullptr);
-				});
-		}
-
-		// Descriptor Set Object
-		{
-			DescriptorLayoutBuilder builder;
-			builder.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT);
-			m_objectSetLayout = builder.build(m_device);
-
-			for (int i = 0; i < FRAME_OVERLAP; i++)
-			{
-				m_frames[i].objectDescriptor = m_globalDescriptorAllocator.allocate(m_device, m_objectSetLayout);
-			}
-
-			m_mainDeletionQueue.push_function([&]()
-				{
-					vkDestroyDescriptorSetLayout(m_device, m_objectSetLayout, nullptr);
-				});
-		}
-
-		const size_t sceneParamBufferSize = FRAME_OVERLAP * padUniformBufferSize(sizeof(GPUSceneData));
-		m_sceneParameterBuffer = createBuffer(sceneParamBufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
-		m_mainDeletionQueue.push_function([&]()
-			{
-				vmaDestroyBuffer(m_allocator, m_sceneParameterBuffer.buffer, m_sceneParameterBuffer.allocation);
-			});
-
-
-		for (int i = 0; i < FRAME_OVERLAP; i++)
-		{
-			m_frames[i].cameraBuffer = createBuffer(sizeof(GPUCameraData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
-
-			const int MAX_OBJECTS = 10000;
-			m_frames[i].objectBuffer = createBuffer(sizeof(GPUObjectData) * MAX_OBJECTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
-
-			DescriptorWriter writer;
-			writer.writeBuffer(0, m_frames[i].cameraBuffer.buffer, sizeof(GPUCameraData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-			writer.writeBuffer(1, m_sceneParameterBuffer.buffer, sizeof(GPUSceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
-			writer.updateSet(m_device, m_frames[i].globalDescriptor);
-			writer.clear();
-			writer.writeBuffer(0, m_frames[i].objectBuffer.buffer, sizeof(GPUObjectData)* MAX_OBJECTS, 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
-			writer.updateSet(m_device, m_frames[i].objectDescriptor);
-
-		}	
 	}
 
 	void RenderDevice::initPipelines()
 	{
 		// TEMP: For compute gradient
 		initGradientPipeline();
-
-		// TEMP: For Default Mesh
-		//initDefaultMeshPipeline();
 
 		// TEMP: For GLTF Mesh
 		initMeshPipeline();
@@ -855,66 +648,17 @@ namespace Moon
 			});
 	}
 
-	void RenderDevice::loadMeshes()
+	void RenderDevice::initDefaultData()
 	{
-		/*Mesh monkey;
-		monkey.loadFromObj("../../assets/monkey_smooth.obj");
-		uploadMesh(monkey);
-		m_meshes["monkey"] = std::move(monkey);*/
-	}
-
-	void RenderDevice::initScene()
-	{
-		/*RenderObject monkey;
-		monkey.mesh = getMesh("monkey");
-		monkey.material = getMaterial("DefaultMesh");
-		monkey.transformMatrix = glm::mat4{ 1.0f };
-
-		for (int x = -20; x <= 20; x++)
-		{
-			for (int y = -20; y <= 20; y++)
-			{
-				glm::mat4 translation = glm::translate(glm::mat4{ 1.0 }, glm::vec3(x, 0, y));
-				glm::mat4 scale = glm::scale(glm::mat4{ 1.0 }, glm::vec3(0.2, 0.2, 0.2));
-				monkey.transformMatrix = translation * scale;
-				m_renderables.push_back(monkey);
-			}
-		}*/
-
-		std::array<Vertex, 4> rect_vertices;
-		rect_vertices[0].position = { 0.5,-0.5, 0 };
-		rect_vertices[1].position = { 0.5,0.5, 0 };
-		rect_vertices[2].position = { -0.5,-0.5, 0 };
-		rect_vertices[3].position = { -0.5,0.5, 0 };
-		rect_vertices[0].color = { 0,0, 0,1 };
-		rect_vertices[1].color = { 0.5,0.5,0.5 ,1 };
-		rect_vertices[2].color = { 1,0, 0,1 };
-		rect_vertices[3].color = { 0,1, 0,1 };
-		rect_vertices[0].uv_x = 1;
-		rect_vertices[0].uv_y = 0;
-		rect_vertices[1].uv_x = 0;
-		rect_vertices[1].uv_y = 0;
-		rect_vertices[2].uv_x = 1;
-		rect_vertices[2].uv_y = 1;
-		rect_vertices[3].uv_x = 0;
-		rect_vertices[3].uv_y = 1;
-
-		std::array<uint32_t, 6> rect_indices;
-		rect_indices[0] = 0;
-		rect_indices[1] = 1;
-		rect_indices[2] = 2;
-		rect_indices[3] = 2;
-		rect_indices[4] = 1;
-		rect_indices[5] = 3;
-
-		m_rectangle = uploadMesh(rect_indices, rect_vertices);
+		//Temp
+		m_gradientPipelinePushConstant.data1 = glm::vec4(1.0, 1.0, 1.0, 0.0);
+		m_gradientPipelinePushConstant.data2 = glm::vec4(0.0, 0.0, 0.0, 0.0);
+		m_meshIndex = 2;
 
 		m_testMeshes = loadGltfMeshes(this, "..\\..\\Assets\\basicmesh.glb", true).value();
 
 		m_mainDeletionQueue.push_function([&]()
 			{
-				vmaDestroyBuffer(m_allocator, m_rectangle.vertexBuffer.buffer, m_rectangle.vertexBuffer.allocation);
-				vmaDestroyBuffer(m_allocator, m_rectangle.indexBuffer.buffer, m_rectangle.indexBuffer.allocation);
 				for (size_t i = 0; i < m_testMeshes.size(); ++i)
 				{
 					auto mesh = m_testMeshes[i]->meshBuffers;
@@ -960,57 +704,6 @@ namespace Moon
 				vkDestroyPipelineLayout(m_device, m_gradientPipelineLayout, nullptr);
 				vkDestroyPipeline(m_device, m_gradientPipeline, nullptr);
 			});
-	}
-
-	void RenderDevice::initDefaultMeshPipeline()
-	{
-		VkPushConstantRange push_constant;
-		push_constant.offset = 0;
-		push_constant.size = sizeof(MeshPushConstants);
-		push_constant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-
-		VkDescriptorSetLayout setLayouts[] = { m_globalSetLayout, m_objectSetLayout };
-
-		VkPipelineLayoutCreateInfo pipeline_layout_info = pipelineLayoutCreateInfo();
-		pipeline_layout_info.pPushConstantRanges = &push_constant;
-		pipeline_layout_info.pushConstantRangeCount = 1;
-		pipeline_layout_info.setLayoutCount = 2;
-		pipeline_layout_info.pSetLayouts = setLayouts;
-
-		VkPipelineLayout meshPipelineLayout;
-		VK_CHECK(vkCreatePipelineLayout(m_device, &pipeline_layout_info, nullptr, &meshPipelineLayout));
-
-		VkShaderModule meshVertexShader;
-		VkShaderModule meshFragShader;
-		if (!loadShaderModule("../../Shaders/mesh.vert.spv", &meshVertexShader))
-		{
-			std::cout << "Error when building the triangle vert shader" << std::endl;
-		}
-		if (!loadShaderModule("../../Shaders/mesh.frag.spv", &meshFragShader))
-		{
-			std::cout << "Error when building the triangle frag shader" << std::endl;
-		}
-
-		VertexInputDescription vertexDescription = Vertex::getVertexDescription();
-		PipelineBuilder pipelineBuilder;
-		pipelineBuilder.setShaders(meshVertexShader, meshFragShader);
-		pipelineBuilder.setVertexInputInfo(vertexDescription);
-		pipelineBuilder.setPipelineLayout(meshPipelineLayout);
-		pipelineBuilder.setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-		pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
-		pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
-		pipelineBuilder.setMultisamplingNone();
-		pipelineBuilder.disableBlending();
-		pipelineBuilder.enableDepthTest(true, VK_COMPARE_OP_GREATER_OR_EQUAL);
-		pipelineBuilder.setColorAttachmentFormat(m_drawImage.imageFormat);
-		pipelineBuilder.setDepthFormat(m_depthImage.imageFormat);
-		VkPipeline meshPipeline;
-		meshPipeline = pipelineBuilder.buildPipeline(m_device);
-
-		createMaterial(std::move(meshPipeline), std::move(meshPipelineLayout), "DefaultMesh");
-
-		vkDestroyShaderModule(m_device, meshVertexShader, nullptr);
-		vkDestroyShaderModule(m_device, meshFragShader, nullptr);
 	}
 
 	void RenderDevice::initMeshPipeline()
@@ -1089,30 +782,6 @@ namespace Moon
 		}
 		*outShaderModule = shaderModule;
 		return true;
-	}
-
-	void RenderDevice::uploadMesh(Mesh& mesh)
-	{
-		VkBufferCreateInfo bufferInfo = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-		bufferInfo.size = mesh.m_vertices.size() * sizeof(Vertex);
-		bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-
-		VmaAllocationCreateInfo vmaallocInfo = {};
-		vmaallocInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
-		VK_CHECK(vmaCreateBuffer(m_allocator, &bufferInfo, &vmaallocInfo,
-			&mesh.m_vertexBuffer.buffer,
-			&mesh.m_vertexBuffer.allocation,
-			nullptr));
-
-		m_mainDeletionQueue.push_function([=]()
-			{
-				vmaDestroyBuffer(m_allocator, mesh.m_vertexBuffer.buffer, mesh.m_vertexBuffer.allocation);
-			});
-
-		void* data;
-		vmaMapMemory(m_allocator, mesh.m_vertexBuffer.allocation, &data);
-		memcpy(data, mesh.m_vertices.data(), mesh.m_vertices.size() * sizeof(Vertex));
-		vmaUnmapMemory(m_allocator, mesh.m_vertexBuffer.allocation);
 	}
 
 	GPUMeshBuffers RenderDevice::uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices)

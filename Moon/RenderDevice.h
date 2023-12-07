@@ -32,19 +32,6 @@ namespace Moon
 		glm::mat4 renderMatrix;
 	};
 
-	struct Material
-	{
-		VkPipeline pipeline;
-		VkPipelineLayout pipelineLayout;
-	};
-
-	struct RenderObject
-	{
-		Mesh* mesh;
-		Material* material;
-		glm::mat4 transformMatrix;
-	};
-
 	struct DeletionQueue
 	{
 		std::deque<std::function<void()>> deletors;
@@ -62,27 +49,6 @@ namespace Moon
 			}
 			deletors.clear();
 		}
-	};
-
-	struct GPUCameraData
-	{
-		glm::mat4 view;
-		glm::mat4 proj;
-		glm::mat4 viewproj;
-	};
-
-	struct GPUSceneData
-	{
-		glm::vec4 fogColor; // w is for exponent
-		glm::vec4 fogDistances; //x for min, y for max, zw unused.
-		glm::vec4 ambientColor;
-		glm::vec4 sunlightDirection; //w for sun power
-		glm::vec4 sunlightColor;
-	};
-
-	struct GPUObjectData
-	{
-		glm::mat4 modelMatrix;
 	};
 
 	struct FrameData
@@ -158,21 +124,15 @@ namespace Moon
 		void drawImpl(VkCommandBuffer cmd);
 		void drawBackground(VkCommandBuffer cmd);
 		void drawMeshes(VkCommandBuffer cmd);
-		void drawRenderObjects(VkCommandBuffer cmd, RenderObject* first, int count);
 		void drawImgui(VkCommandBuffer cmd, VkImageView targetImageView);
 		void run();
 
 		void immediateSubmit(std::function<void(VkCommandBuffer cmd)>&& function);
 
-		Material* createMaterial(VkPipeline pipeline, VkPipelineLayout layout, const std::string& name);
-		Material* getMaterial(const std::string& name);
-		Mesh* getMesh(const std::string& name);
-
 		AllocatedBuffer createBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
 		AllocatedImage createImage(VkExtent3D size, VkFormat format, VkImageUsageFlags usage);
 		AllocatedImage createImage(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage);
 
-		void uploadMesh(Mesh& mesh);
 		GPUMeshBuffers uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices);
 		void destroyBuffer(const AllocatedBuffer& buffer);
 
@@ -185,12 +145,10 @@ namespace Moon
 		void initPipelines();
 		void initRayTracing();
 		void initImgui();
-		void loadMeshes();
-		void initScene();
+		void initDefaultData();
 
 		//TEMP:
 		void initGradientPipeline();
-		void initDefaultMeshPipeline();
 		void initMeshPipeline();
 
 		FrameData& getCurrentFrame();
@@ -243,18 +201,10 @@ namespace Moon
 		//RayTracing
 		VkPhysicalDeviceProperties2 m_physicalDeviceProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
 		VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR };
-		
-		//Scene Management
-		std::vector<RenderObject> m_renderables;
-		std::unordered_map<std::string, Material> m_materials;
-		std::unordered_map<std::string, Mesh> m_meshes;
-		GPUSceneData m_sceneParameters;
-		AllocatedBuffer m_sceneParameterBuffer;
 
 		//TEMP: Mesh pipeline
 		VkPipelineLayout m_meshPipelineLayout;
 		VkPipeline m_meshPipeline;
-		GPUMeshBuffers m_rectangle;
 		std::vector<std::shared_ptr<MeshAsset>> m_testMeshes;
 		int m_meshIndex;
 
