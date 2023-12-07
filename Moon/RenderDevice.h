@@ -1,9 +1,10 @@
 ﻿#pragma once
 #include "RenderTypes.h"
-#include "RenderImage.h"
-#include "RenderMesh.h"
+#include "Image.h"
+#include "Mesh.h"
+#include "Descriptor.h"
+#include "Pipeline.h"
 
-#include <deque>
 #include <functional>
 #include <unordered_map>
 
@@ -60,60 +61,8 @@ namespace Moon
 		VkCommandBuffer mainCommandBuffer;
 
 		DeletionQueue deletionQueue;
-
-		AllocatedBuffer cameraBuffer;
-		VkDescriptorSet globalDescriptor;
-
-		AllocatedBuffer objectBuffer;
-		VkDescriptorSet objectDescriptor;
+		DescriptorAllocator frameDescriptors;
 	};
-
-	struct DescriptorLayoutBuilder
-	{
-		std::vector<VkDescriptorSetLayoutBinding> bindings;
-
-		void addBinding(uint32_t binding, VkDescriptorType type, VkShaderStageFlags shaderStages);
-		void clear();
-		VkDescriptorSetLayout build(VkDevice device);
-	};
-
-	struct DescriptorAllocator
-	{
-	public:
-		struct PoolSizeRatio
-		{
-			VkDescriptorType type;
-			float ratio;
-		};
-
-		void initPool(VkDevice device, uint32_t maxSets, std::span<PoolSizeRatio> poolRatios);
-		void clearDescriptors(VkDevice device);
-		void destroyPool(VkDevice device);
-		VkDescriptorSet allocate(VkDevice device, VkDescriptorSetLayout layout);
-
-	private:
-		VkDescriptorPool getPool(VkDevice device);
-		VkDescriptorPool createPool(VkDevice device, uint32_t setCount, std::span<PoolSizeRatio> poolRatios);
-
-		std::vector<PoolSizeRatio> ratios;
-		std::vector<VkDescriptorPool> fullPools;
-		std::vector<VkDescriptorPool> readyPools;
-		uint32_t setsPerPool;
-	};
-
-	struct DescriptorWriter
-	{
-		std::deque<VkDescriptorImageInfo> imageInfos;
-		std::deque<VkDescriptorBufferInfo> bufferInfos;
-		std::vector<VkWriteDescriptorSet> writes;
-
-		void writeImage(int binding, VkImageView image, VkSampler sampler, VkImageLayout layout, VkDescriptorType type);
-		void writeBuffer(int binding, VkBuffer buffer, size_t size, size_t offset, VkDescriptorType type);
-
-		void clear();
-		void updateSet(VkDevice device, VkDescriptorSet set);
-	};
-
 
 	class RenderDevice
 	{
@@ -135,6 +84,7 @@ namespace Moon
 
 		GPUMeshBuffers uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices);
 		void destroyBuffer(const AllocatedBuffer& buffer);
+		void destroyImage(const AllocatedImage& image);
 
 	private:
 		void initVulkan();
@@ -208,43 +158,17 @@ namespace Moon
 		std::vector<std::shared_ptr<MeshAsset>> m_testMeshes;
 		int m_meshIndex;
 
+		//TEMP: Default Image
+		AllocatedImage m_whiteImage;
+		AllocatedImage m_blackImage;
+		AllocatedImage m_greyImage;
+		AllocatedImage m_errorCheckerboardImage;
+		VkSampler m_defaultSamplerLinear;
+		VkSampler m_defaultSamplerNearest;
+
 		// TEMP: For Compute Gradient
 		VkPipeline m_gradientPipeline;
 		VkPipelineLayout m_gradientPipelineLayout;
 		ComputePushConstants m_gradientPipelinePushConstant;
-	};
-
-	class PipelineBuilder 
-	{
-	public:
-		PipelineBuilder();
-
-		void clear();
-		VkPipeline buildPipeline(VkDevice device);
-
-		void setShaders(VkShaderModule vertexShader, VkShaderModule fragmentShader);
-		void setPipelineLayout(VkPipelineLayout pipelineLayout);
-		void setInputTopology(VkPrimitiveTopology topology);
-		void setVertexInputInfo(VertexInputDescription& vertexInput);
-		void setPolygonMode(VkPolygonMode mode);
-		void setCullMode(VkCullModeFlags cullMode, VkFrontFace frontFace);
-		void setMultisamplingNone();
-		void disableBlending();
-		void setColorAttachmentFormat(VkFormat format);
-		void setDepthFormat(VkFormat format);
-		void disableDepthTest();
-		void enableDepthTest(bool bDepthWrite, VkCompareOp compareOp);
-
-	public:
-		std::vector<VkPipelineShaderStageCreateInfo> m_shaderStages;
-		VkFormat m_colorAttachmentformat;
-		VkPipelineVertexInputStateCreateInfo m_vertexInputInfo;
-		VkPipelineInputAssemblyStateCreateInfo m_inputAssembly;
-		VkPipelineRasterizationStateCreateInfo m_rasterizer;
-		VkPipelineColorBlendAttachmentState m_colorBlendAttachment;
-		VkPipelineMultisampleStateCreateInfo m_multisampling;
-		VkPipelineLayout m_pipelineLayout;
-		VkPipelineDepthStencilStateCreateInfo m_depthStencil;
-		VkPipelineRenderingCreateInfo m_renderInfo;
 	};
 }

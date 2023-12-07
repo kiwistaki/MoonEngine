@@ -1,4 +1,4 @@
-#include "RenderImage.h"
+#include "Image.h"
 #include "RenderUtilities.h"
 
 namespace Moon

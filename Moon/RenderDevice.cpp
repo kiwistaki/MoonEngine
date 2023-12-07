@@ -1,7 +1,6 @@
 ﻿#include "RenderDevice.h"
 
 #include <array>
-#include <iostream>
 #include <fstream>
 
 #define VK_USE_PLATFORM_WIN32_KHR
@@ -24,18 +23,6 @@
 #include <vk_mem_alloc.h>
 
 #include <glm/gtx/transform.hpp>
-
-using namespace std;
-#define VK_CHECK(x)                                                    \
-	do                                                                 \
-	{                                                                  \
-		VkResult err = x;                                              \
-		if (err)                                                       \
-		{                                                              \
-			std::cout <<"Detected Vulkan error: " << err << std::endl; \
-			abort();                                                   \
-		}                                                              \
-	} while (0)
 
 namespace Moon
 {
@@ -95,7 +82,9 @@ namespace Moon
 		FrameData& frame = getCurrentFrame();
 		VK_CHECK(vkWaitForFences(m_device, 1, &frame.renderFence, true, 1000000000));
 		VK_CHECK(vkResetFences(m_device, 1, &frame.renderFence));
+		
 		frame.deletionQueue.flush();
+		frame.frameDescriptors.clearDescriptors(m_device);
 
 		uint32_t swapchainImageIndex;
 		VK_CHECK(vkAcquireNextImageKHR(m_device, m_swapchain, 1000000000, frame.presentSemaphore, nullptr, &swapchainImageIndex));
@@ -326,12 +315,10 @@ namespace Moon
 	AllocatedImage RenderDevice::createImage(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage)
 	{
 		size_t data_size = size.depth * size.width * size.height * 4;
-		AllocatedBuffer uploadbuffer = createBuffer(data_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
-
-		memcpy(uploadbuffer.info.pMappedData, data, data_size);
+		AllocatedBuffer uploadBuffer = createBuffer(data_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+		memcpy(uploadBuffer.info.pMappedData, data, data_size);
 
 		AllocatedImage new_image = createImage(size, format, usage | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-
 		immediateSubmit([&](VkCommandBuffer cmd)
 		{
 			transitionImage(cmd, new_image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -340,22 +327,20 @@ namespace Moon
 			copyRegion.bufferOffset = 0;
 			copyRegion.bufferRowLength = 0;
 			copyRegion.bufferImageHeight = 0;
-
 			copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 			copyRegion.imageSubresource.mipLevel = 0;
 			copyRegion.imageSubresource.baseArrayLayer = 0;
 			copyRegion.imageSubresource.layerCount = 1;
 			copyRegion.imageExtent = size;
 
-			// copy the buffer into the image
-			vkCmdCopyBufferToImage(cmd, uploadbuffer.buffer, new_image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+			vkCmdCopyBufferToImage(cmd, uploadBuffer.buffer, new_image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
 				&copyRegion);
 
 			transitionImage(cmd, new_image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 		});
 
-		vmaDestroyBuffer(m_allocator, uploadbuffer.buffer, uploadbuffer.allocation);
+		destroyBuffer(uploadBuffer);
 
 		return new_image;
 	}
@@ -576,6 +561,24 @@ namespace Moon
 			writer.writeImage(0, m_drawImage.imageView, blockySampler, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
 			writer.updateSet(m_device, m_drawImageDescriptorSet);
 		}
+
+		for (int i = 0; i < FRAME_OVERLAP; i++)
+		{
+			std::vector<DescriptorAllocator::PoolSizeRatio> frame_sizes = {
+				{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3 },
+				{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 },
+				{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3 },
+				{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 },
+			};
+
+			m_frames[i].frameDescriptors = DescriptorAllocator{};
+			m_frames[i].frameDescriptors.initPool(m_device, 1000, frame_sizes);
+
+			m_mainDeletionQueue.push_function([&, i]()
+				{
+					m_frames[i].frameDescriptors.destroyPool(m_device);
+				});
+		}
 	}
 
 	void RenderDevice::initPipelines()
@@ -657,14 +660,57 @@ namespace Moon
 
 		m_testMeshes = loadGltfMeshes(this, "..\\..\\Assets\\basicmesh.glb", true).value();
 
+		// Default textures and samplers
+		uint32_t white = 0xFFFFFFFF;
+		m_whiteImage = createImage((void*)&white, VkExtent3D{ 1, 1, 1 }, VK_FORMAT_R8G8B8A8_UNORM,
+			VK_IMAGE_USAGE_SAMPLED_BIT);
+
+		uint32_t grey = 0xAAAAAAFF;
+		m_greyImage = createImage((void*)&grey, VkExtent3D{ 1, 1, 1 }, VK_FORMAT_R8G8B8A8_UNORM,
+			VK_IMAGE_USAGE_SAMPLED_BIT);
+
+		uint32_t black = 0x000000FF;
+		m_blackImage = createImage((void*)&black, VkExtent3D{ 1, 1, 1 }, VK_FORMAT_R8G8B8A8_UNORM,
+			VK_IMAGE_USAGE_SAMPLED_BIT);
+
+		//checkerboard image
+		uint32_t magenta = 0xFF00FFFF;
+		std::array<uint32_t, 16 * 16 > pixels; //for 16x16 checkerboard texture
+		for (int x = 0; x < 16; x++)
+		{
+			for (int y = 0; y < 16; y++)
+			{
+				pixels[y * 16 + x] = ((x % 2) ^ (y % 2)) ? magenta : black;
+			}
+		}
+		m_errorCheckerboardImage = createImage(pixels.data(), VkExtent3D{ 16, 16, 1 }, VK_FORMAT_R8G8B8A8_UNORM,
+			VK_IMAGE_USAGE_SAMPLED_BIT);
+
+		VkSamplerCreateInfo sampl = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+		sampl.magFilter = VK_FILTER_NEAREST;
+		sampl.minFilter = VK_FILTER_NEAREST;
+		vkCreateSampler(m_device, &sampl, nullptr, &m_defaultSamplerNearest);
+
+		sampl.magFilter = VK_FILTER_LINEAR;
+		sampl.minFilter = VK_FILTER_LINEAR;
+		vkCreateSampler(m_device, &sampl, nullptr, &m_defaultSamplerLinear);
+
 		m_mainDeletionQueue.push_function([&]()
 			{
 				for (size_t i = 0; i < m_testMeshes.size(); ++i)
 				{
 					auto mesh = m_testMeshes[i]->meshBuffers;
-					vmaDestroyBuffer(m_allocator, mesh.vertexBuffer.buffer, mesh.vertexBuffer.allocation);
-					vmaDestroyBuffer(m_allocator, mesh.indexBuffer.buffer, mesh.indexBuffer.allocation);
+					destroyBuffer(mesh.vertexBuffer);
+					destroyBuffer(mesh.indexBuffer);
 				}
+
+				vkDestroySampler(m_device, m_defaultSamplerLinear, nullptr);
+				vkDestroySampler(m_device, m_defaultSamplerNearest, nullptr);
+
+				destroyImage(m_whiteImage);
+				destroyImage(m_greyImage);
+				destroyImage(m_blackImage);
+				destroyImage(m_errorCheckerboardImage);
 			});
 	}
 
@@ -836,6 +882,12 @@ namespace Moon
 		vmaDestroyBuffer(m_allocator, buffer.buffer, buffer.allocation);
 	}
 
+	void RenderDevice::destroyImage(const AllocatedImage& image)
+	{
+		vkDestroyImageView(m_device, image.imageView, nullptr);
+		vmaDestroyImage(m_allocator, image.image, image.allocation);
+	}
+
 	size_t RenderDevice::padUniformBufferSize(size_t originalSize)
 	{
 		size_t minUboAlignment = m_gpuProperties.limits.minUniformBufferOffsetAlignment;
@@ -845,350 +897,5 @@ namespace Moon
 			alignedSize = (alignedSize + minUboAlignment - 1) & ~(minUboAlignment - 1);
 		}
 		return alignedSize;
-	}
-
-	void DescriptorLayoutBuilder::addBinding(uint32_t binding, VkDescriptorType type, VkShaderStageFlags shaderStages)
-	{
-		VkDescriptorSetLayoutBinding newbind{};
-		newbind.binding = binding;
-		newbind.descriptorCount = 1;
-		newbind.descriptorType = type;
-		newbind.stageFlags = shaderStages;
-		bindings.push_back(newbind);
-	}
-
-	void DescriptorLayoutBuilder::clear()
-	{
-		bindings.clear();
-	}
-
-	VkDescriptorSetLayout DescriptorLayoutBuilder::build(VkDevice device)
-	{
-		VkDescriptorSetLayoutCreateInfo info = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-		info.pBindings = bindings.data();
-		info.bindingCount = (uint32_t)bindings.size();
-		info.flags = 0;
-
-		VkDescriptorSetLayout set;
-		VK_CHECK(vkCreateDescriptorSetLayout(device, &info, nullptr, &set));
-		return set;
-	}
-
-	void DescriptorAllocator::initPool(VkDevice device, uint32_t maxSets, std::span<PoolSizeRatio> poolRatios)
-	{
-		ratios.clear();
-
-		for (auto r : poolRatios)
-		{
-			ratios.push_back(r);
-		}
-
-		VkDescriptorPool newPool = createPool(device, maxSets, poolRatios);
-		setsPerPool = (uint32_t)(maxSets * 1.5);
-		readyPools.push_back(newPool);
-	}
-
-	void DescriptorAllocator::clearDescriptors(VkDevice device)
-	{
-		for (auto p : readyPools)
-		{
-			vkResetDescriptorPool(device, p, 0);
-		}
-		for (auto p : fullPools)
-		{
-			vkResetDescriptorPool(device, p, 0);
-			readyPools.push_back(p);
-		}
-		fullPools.clear();
-	}
-
-	void DescriptorAllocator::destroyPool(VkDevice device)
-	{
-		for (auto p : readyPools)
-		{
-			vkDestroyDescriptorPool(device, p, nullptr);
-		}
-		readyPools.clear();
-		for (auto p : fullPools)
-		{
-			vkDestroyDescriptorPool(device, p, nullptr);
-		}
-		fullPools.clear();
-	}
-
-	VkDescriptorSet DescriptorAllocator::allocate(VkDevice device, VkDescriptorSetLayout layout)
-	{
-		VkDescriptorPool poolToUse = getPool(device);
-
-		VkDescriptorSetAllocateInfo allocInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-		allocInfo.descriptorPool = poolToUse;
-		allocInfo.descriptorSetCount = 1;
-		allocInfo.pSetLayouts = &layout;
-
-		VkDescriptorSet ds;
-		VkResult result = vkAllocateDescriptorSets(device, &allocInfo, &ds);
-
-		//allocation failed. Try again
-		if (result == VK_ERROR_OUT_OF_POOL_MEMORY || result == VK_ERROR_FRAGMENTED_POOL)
-		{
-			fullPools.push_back(poolToUse);
-			poolToUse = getPool(device);
-			allocInfo.descriptorPool = poolToUse;
-			VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &ds));
-		}
-
-		readyPools.push_back(poolToUse);
-		return ds;
-	}
-
-	VkDescriptorPool DescriptorAllocator::getPool(VkDevice device)
-	{
-		VkDescriptorPool newPool;
-		if (readyPools.size() != 0)
-		{
-			newPool = readyPools.back();
-			readyPools.pop_back();
-		}
-		else
-		{
-			//need to create a new pool
-			newPool = createPool(device, setsPerPool, ratios);
-
-			setsPerPool = (uint32_t)(setsPerPool * 1.5);
-			if (setsPerPool > 4092)
-			{
-				setsPerPool = 4092;
-			}
-		}
-
-		return newPool;
-	}
-
-	VkDescriptorPool DescriptorAllocator::createPool(VkDevice device, uint32_t setCount, std::span<PoolSizeRatio> poolRatios)
-	{
-		std::vector<VkDescriptorPoolSize> poolSizes;
-		for (PoolSizeRatio ratio : poolRatios)
-		{
-			poolSizes.push_back(VkDescriptorPoolSize
-				{
-				.type = ratio.type,
-				.descriptorCount = uint32_t(ratio.ratio * setCount)
-				});
-		}
-
-		VkDescriptorPoolCreateInfo pool_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-		pool_info.maxSets = setCount;
-		pool_info.poolSizeCount = (uint32_t)poolSizes.size();
-		pool_info.pPoolSizes = poolSizes.data();
-
-		VkDescriptorPool newPool;
-		vkCreateDescriptorPool(device, &pool_info, nullptr, &newPool);
-		return newPool;
-	}
-
-	PipelineBuilder::PipelineBuilder()
-	{
-		clear();
-	}
-
-	void PipelineBuilder::clear()
-	{
-		//m_vertexInputInfo = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
-		m_inputAssembly = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
-		m_rasterizer = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
-		m_colorBlendAttachment = {};
-		m_multisampling = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
-		m_pipelineLayout = {};
-		m_depthStencil = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
-		m_renderInfo = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
-		m_shaderStages.clear();
-		//m_colorAttachmentformats.clear();
-	}
-
-	VkPipeline PipelineBuilder::buildPipeline(VkDevice device)
-	{
-		VkPipelineViewportStateCreateInfo viewportState = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
-		viewportState.viewportCount = 1;
-		viewportState.scissorCount = 1;
-
-		VkPipelineColorBlendStateCreateInfo colorBlending = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
-		colorBlending.logicOpEnable = VK_FALSE;
-		colorBlending.logicOp = VK_LOGIC_OP_COPY;
-		colorBlending.attachmentCount = 1;
-		colorBlending.pAttachments = &m_colorBlendAttachment;
-
-		VkPipelineVertexInputStateCreateInfo vertexInputInfo = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
-		VkGraphicsPipelineCreateInfo pipelineInfo = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
-		pipelineInfo.pNext = &m_renderInfo;
-		pipelineInfo.stageCount = static_cast<uint32_t>(m_shaderStages.size());
-		pipelineInfo.pStages = m_shaderStages.data();
-		pipelineInfo.pVertexInputState = &vertexInputInfo;
-		pipelineInfo.pInputAssemblyState = &m_inputAssembly;
-		pipelineInfo.pViewportState = &viewportState;
-		pipelineInfo.pRasterizationState = &m_rasterizer;
-		pipelineInfo.pMultisampleState = &m_multisampling;
-		pipelineInfo.pColorBlendState = &colorBlending;
-		pipelineInfo.pDepthStencilState = &m_depthStencil;
-		pipelineInfo.layout = m_pipelineLayout;
-
-		VkDynamicState state[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-		VkPipelineDynamicStateCreateInfo dynamicInfo = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
-		dynamicInfo.dynamicStateCount = 2;
-		dynamicInfo.pDynamicStates = &state[0];
-		pipelineInfo.pDynamicState = &dynamicInfo;
-
-
-		VkPipeline newPipeline;
-		if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS)
-		{
-			std::cout << "failed to create pipeline\n";
-			return VK_NULL_HANDLE; // failed to create graphics pipeline
-		}
-		else
-		{
-			return newPipeline;
-		}
-	}
-	
-	void PipelineBuilder::setShaders(VkShaderModule vertexShader, VkShaderModule fragmentShader)
-	{
-		m_shaderStages.clear();
-		m_shaderStages.push_back(pipelineShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vertexShader));
-		m_shaderStages.push_back(pipelineShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, fragmentShader));
-	}
-
-	void PipelineBuilder::setPipelineLayout(VkPipelineLayout pipelineLayout)
-	{
-		m_pipelineLayout = pipelineLayout;
-	}
-
-	void PipelineBuilder::setInputTopology(VkPrimitiveTopology topology)
-	{
-		m_inputAssembly.topology = topology;
-		m_inputAssembly.primitiveRestartEnable = VK_FALSE;
-	}
-
-	void PipelineBuilder::setVertexInputInfo(VertexInputDescription& vertexInput)
-	{
-		m_vertexInputInfo.pVertexAttributeDescriptions = vertexInput.attributes.data();
-		m_vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexInput.attributes.size());
-		m_vertexInputInfo.pVertexBindingDescriptions = vertexInput.bindings.data();
-		m_vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexInput.bindings.size());
-	}
-	
-	void PipelineBuilder::setPolygonMode(VkPolygonMode mode)
-	{
-		m_rasterizer.polygonMode = mode;
-		m_rasterizer.lineWidth = 1.f;
-	}
-	
-	void PipelineBuilder::setCullMode(VkCullModeFlags cullMode, VkFrontFace frontFace)
-	{
-		m_rasterizer.cullMode = cullMode;
-		m_rasterizer.frontFace = frontFace;
-	}
-	
-	void PipelineBuilder::setMultisamplingNone()
-	{
-		m_multisampling.sampleShadingEnable = VK_FALSE;
-		m_multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-		m_multisampling.minSampleShading = 1.0f;
-		m_multisampling.pSampleMask = nullptr;
-		m_multisampling.alphaToCoverageEnable = VK_FALSE;
-		m_multisampling.alphaToOneEnable = VK_FALSE;
-	}
-	
-	void PipelineBuilder::disableBlending()
-	{
-		m_colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-		m_colorBlendAttachment.blendEnable = VK_FALSE;
-	}
-	
-	void PipelineBuilder::setColorAttachmentFormat(VkFormat format)
-	{
-		m_colorAttachmentformat = format;
-		m_renderInfo.colorAttachmentCount = 1;
-		m_renderInfo.pColorAttachmentFormats = &m_colorAttachmentformat;
-	}
-	
-	void PipelineBuilder::setDepthFormat(VkFormat format)
-	{
-		m_renderInfo.depthAttachmentFormat = format;
-	}
-	
-	void PipelineBuilder::disableDepthTest()
-	{
-		m_depthStencil.depthTestEnable = VK_FALSE;
-		m_depthStencil.depthWriteEnable = VK_FALSE;
-		m_depthStencil.depthCompareOp = VK_COMPARE_OP_NEVER;
-		m_depthStencil.depthBoundsTestEnable = VK_FALSE;
-		m_depthStencil.stencilTestEnable = VK_FALSE;
-		m_depthStencil.front = {};
-		m_depthStencil.back = {};
-		m_depthStencil.minDepthBounds = 0.f;
-		m_depthStencil.maxDepthBounds = 1.f;
-	}
-
-	void PipelineBuilder::enableDepthTest(bool bDepthWrite, VkCompareOp compareOp)
-	{
-		m_depthStencil.depthTestEnable = VK_TRUE;
-		m_depthStencil.depthWriteEnable = bDepthWrite;
-		m_depthStencil.depthCompareOp = compareOp;
-		m_depthStencil.depthBoundsTestEnable = VK_FALSE;
-		m_depthStencil.stencilTestEnable = VK_FALSE;
-		m_depthStencil.front = {};
-		m_depthStencil.back = {};
-		m_depthStencil.minDepthBounds = 0.f;
-		m_depthStencil.maxDepthBounds = 1.f;
-	}
-
-	void DescriptorWriter::writeImage(int binding, VkImageView image, VkSampler sampler, VkImageLayout layout, VkDescriptorType type)
-	{
-		VkDescriptorImageInfo& info = imageInfos.emplace_back(VkDescriptorImageInfo{
-				.sampler = sampler,
-				.imageView = image,
-				.imageLayout = layout
-			});
-
-		VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-		write.dstBinding = binding;
-		write.dstSet = VK_NULL_HANDLE;
-		write.descriptorCount = 1;
-		write.descriptorType = type;
-		write.pImageInfo = &info;
-
-		writes.push_back(write);
-	}
-
-	void DescriptorWriter::writeBuffer(int binding, VkBuffer buffer, size_t size, size_t offset, VkDescriptorType type)
-	{
-		VkDescriptorBufferInfo& info = bufferInfos.emplace_back(VkDescriptorBufferInfo{
-				.buffer = buffer,
-				.offset = offset,
-				.range = size
-			});
-
-		VkWriteDescriptorSet write = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-		write.dstBinding = binding;
-		write.dstSet = VK_NULL_HANDLE;
-		write.descriptorCount = 1;
-		write.descriptorType = type;
-		write.pBufferInfo = &info;
-
-		writes.push_back(write);
-	}
-
-	void DescriptorWriter::clear()
-	{
-		imageInfos.clear();
-		writes.clear();
-		bufferInfos.clear();
-	}
-
-	void DescriptorWriter::updateSet(VkDevice device, VkDescriptorSet set)
-	{
-		for (VkWriteDescriptorSet& write : writes)
-			write.dstSet = set;
-		vkUpdateDescriptorSets(device, (uint32_t)writes.size(), writes.data(), 0, nullptr);
 	}
 }
