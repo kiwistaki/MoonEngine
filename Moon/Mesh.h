@@ -9,14 +9,6 @@
 
 namespace Moon
 {
-	struct VertexInputDescription
-	{
-		std::vector<VkVertexInputBindingDescription> bindings;
-		std::vector<VkVertexInputAttributeDescription> attributes;
-
-		VkPipelineVertexInputStateCreateFlags flags = 0;
-	};
-
 	struct Vertex
 	{
 		glm::vec3 position;
@@ -24,16 +16,6 @@ namespace Moon
 		glm::vec3 normal;
 		float uv_y;
 		glm::vec4 color;
-
-		static VertexInputDescription getVertexDescription();
-	};
-
-	struct Mesh
-	{
-		std::vector<Vertex> m_vertices;
-		AllocatedBuffer m_vertexBuffer;
-
-		bool loadFromObj(const char* filename);
 	};
 
 	struct GPUMeshBuffers

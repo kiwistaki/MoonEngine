@@ -10,7 +10,6 @@ namespace Moon
 
 	void PipelineBuilder::clear()
 	{
-		//m_vertexInputInfo = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
 		m_inputAssembly = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
 		m_rasterizer = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
 		m_colorBlendAttachment = {};
@@ -19,7 +18,6 @@ namespace Moon
 		m_depthStencil = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
 		m_renderInfo = { VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
 		m_shaderStages.clear();
-		//m_colorAttachmentformats.clear();
 	}
 
 	VkPipeline PipelineBuilder::buildPipeline(VkDevice device)
@@ -83,14 +81,6 @@ namespace Moon
 	{
 		m_inputAssembly.topology = topology;
 		m_inputAssembly.primitiveRestartEnable = VK_FALSE;
-	}
-
-	void PipelineBuilder::setVertexInputInfo(VertexInputDescription& vertexInput)
-	{
-		m_vertexInputInfo.pVertexAttributeDescriptions = vertexInput.attributes.data();
-		m_vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexInput.attributes.size());
-		m_vertexInputInfo.pVertexBindingDescriptions = vertexInput.bindings.data();
-		m_vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexInput.bindings.size());
 	}
 
 	void PipelineBuilder::setPolygonMode(VkPolygonMode mode)

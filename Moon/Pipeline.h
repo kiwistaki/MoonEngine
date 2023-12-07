@@ -15,7 +15,6 @@ namespace Moon
 		void setShaders(VkShaderModule vertexShader, VkShaderModule fragmentShader);
 		void setPipelineLayout(VkPipelineLayout pipelineLayout);
 		void setInputTopology(VkPrimitiveTopology topology);
-		void setVertexInputInfo(VertexInputDescription& vertexInput);
 		void setPolygonMode(VkPolygonMode mode);
 		void setCullMode(VkCullModeFlags cullMode, VkFrontFace frontFace);
 		void setMultisamplingNone();
@@ -28,7 +27,6 @@ namespace Moon
 	public:
 		std::vector<VkPipelineShaderStageCreateInfo> m_shaderStages;
 		VkFormat m_colorAttachmentformat;
-		VkPipelineVertexInputStateCreateInfo m_vertexInputInfo;
 		VkPipelineInputAssemblyStateCreateInfo m_inputAssembly;
 		VkPipelineRasterizationStateCreateInfo m_rasterizer;
 		VkPipelineColorBlendAttachmentState m_colorBlendAttachment;
