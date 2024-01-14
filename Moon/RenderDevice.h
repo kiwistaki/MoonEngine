@@ -4,6 +4,7 @@
 #include "Mesh.h"
 #include "Descriptor.h"
 #include "Pipeline.h"
+#include "Camera.h"
 
 #include <functional>
 #include <unordered_map>
@@ -19,13 +20,8 @@ struct SDL_Window;
 
 namespace Moon
 {
-	struct ComputePushConstants
-	{
-		glm::vec4 data1;
-		glm::vec4 data2;
-		glm::vec4 data3;
-		glm::vec4 data4;
-	};
+	//Forward declaration
+	class RenderDevice;
 
 	struct MeshPushConstants
 	{
@@ -37,7 +33,7 @@ namespace Moon
 	{
 		std::deque<std::function<void()>> deletors;
 
-		void push_function(std::function<void()>&& function)
+		void pushFunction(std::function<void()>&& function)
 		{
 			deletors.push_back(function);
 		}
@@ -64,6 +60,38 @@ namespace Moon
 		DescriptorAllocator frameDescriptors;
 	};
 
+	struct GLTFMetallic_Roughness
+	{
+		MaterialPipeline opaquePipeline;
+		MaterialPipeline transparentPipeline;
+		VkDescriptorSetLayout materialLayout;
+
+		struct MaterialConstants
+		{
+			glm::vec4 baseColorFactors;
+			glm::vec4 metalRoughFactors;
+			glm::vec4 extra[14];
+		};
+
+		struct MaterialResources
+		{
+			AllocatedImage colorImage;
+			VkSampler colorSampler;
+			AllocatedImage metalRoughImage;
+			VkSampler metalRoughSampler;
+			VkBuffer dataBuffer;
+			uint32_t dataBufferOffset;
+		};
+
+		DescriptorWriter writer;
+
+		void buildPipelines(RenderDevice* engine);
+		void clearResources(VkDevice device);
+
+		MaterialInstance writeMaterial(VkDevice device, MaterialPass pass, const MaterialResources& resources, DescriptorAllocator& descriptorAllocator);
+	};
+
+
 	class RenderDevice
 	{
 	public:
@@ -86,6 +114,28 @@ namespace Moon
 		void destroyBuffer(const AllocatedBuffer& buffer);
 		void destroyImage(const AllocatedImage& image);
 
+		bool loadShaderModule(const char* filePath, VkShaderModule* shaderModule);
+
+		VkDevice getDevice() { return m_device; }
+		VkDescriptorSetLayout getSceneDataDescriptorLayout() { return m_gpuSceneDataDescriptorLayout; }
+		AllocatedImage getDrawImage() { return m_drawImage; }
+		AllocatedImage getDepthImage() { return m_depthImage; }
+
+		DeletionQueue& getDeletionQueue() { return m_mainDeletionQueue; }
+
+		void updateScene();
+
+	public:
+		// Default Image
+		AllocatedImage m_whiteImage;
+		AllocatedImage m_blackImage;
+		AllocatedImage m_greyImage;
+		AllocatedImage m_errorCheckerboardImage;
+		VkSampler m_defaultSamplerLinear;
+		VkSampler m_defaultSamplerNearest;
+
+		GLTFMetallic_Roughness m_metalRoughMaterial;
+
 	private:
 		void initVulkan();
 		void initSwapchain();
@@ -97,13 +147,7 @@ namespace Moon
 		void initImgui();
 		void initDefaultData();
 
-		//TEMP:
-		void initGradientPipeline();
-		void initMeshPipeline();
-
 		FrameData& getCurrentFrame();
-
-		bool loadShaderModule(const char* filePath, VkShaderModule* shaderModule);
 		size_t padUniformBufferSize(size_t originalSize);
 
 	private:
@@ -144,31 +188,22 @@ namespace Moon
 		VkCommandBuffer m_immCommandBuffer;
 		VkCommandPool m_immCommandPool;
 
-		//Internal Render Image
+		// Internal Render Image
 		AllocatedImage m_drawImage;
 		AllocatedImage m_depthImage;
 
-		//RayTracing
+		// RayTracing
 		VkPhysicalDeviceProperties2 m_physicalDeviceProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
 		VkPhysicalDeviceRayTracingPipelinePropertiesKHR m_rtProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR };
 
-		//TEMP: Mesh pipeline
-		VkPipelineLayout m_meshPipelineLayout;
-		VkPipeline m_meshPipeline;
-		std::vector<std::shared_ptr<MeshAsset>> m_testMeshes;
-		int m_meshIndex;
+		// For GLTF mesh rendering
+		VkDescriptorSetLayout m_gpuSceneDataDescriptorLayout;
+		MaterialInstance m_defaultData;
+		DrawContext m_mainDrawContext;
+		GPUSceneData m_sceneData;
+		std::unordered_map<std::string, std::shared_ptr<LoadedGLTF>> m_loadedScenes;
 
-		//TEMP: Default Image
-		AllocatedImage m_whiteImage;
-		AllocatedImage m_blackImage;
-		AllocatedImage m_greyImage;
-		AllocatedImage m_errorCheckerboardImage;
-		VkSampler m_defaultSamplerLinear;
-		VkSampler m_defaultSamplerNearest;
+		Camera m_mainCamera;
 
-		// TEMP: For Compute Gradient
-		VkPipeline m_gradientPipeline;
-		VkPipelineLayout m_gradientPipelineLayout;
-		ComputePushConstants m_gradientPipelinePushConstant;
 	};
 }

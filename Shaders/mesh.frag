@@ -1,16 +1,19 @@
 #version 450
-layout (location = 0) in vec3 inColor;
+#extension GL_GOOGLE_include_directive : require
+
+#include "inputStructures.glsl"
+
+layout (location = 0) in vec3 inNormal;
+layout (location = 1) in vec3 inColor;
+layout (location = 2) in vec2 inUV;
+
 layout (location = 0) out vec4 outFragColor;
 
-layout(set = 0, binding = 1) uniform  SceneData {
-    vec4 fogColor;              // w is for exponent
-	vec4 fogDistances;          //x for min, y for max, zw unused.
-	vec4 ambientColor;
-	vec4 sunlightDirection;     //w for sun power
-	vec4 sunlightColor;
-} sceneData;
-
-void main()
+void main() 
 {
-	outFragColor = vec4(inColor + sceneData.ambientColor.xyz, 1.0f);
+	float lightValue = max(dot(inNormal, sceneData.sunlightDirection.xyz), 0.1f);
+	vec3 color = inColor * texture(baseColorTex, inUV).xyz;
+	vec3 ambient = color *  sceneData.ambientColor.xyz;
+
+	outFragColor = vec4(color * lightValue *  sceneData.sunlightColor.w + ambient ,1.0f);
 }

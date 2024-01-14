@@ -23,6 +23,7 @@ namespace Moon
 		void setDepthFormat(VkFormat format);
 		void disableDepthTest();
 		void enableDepthTest(bool bDepthWrite, VkCompareOp compareOp);
+		void enableBlendingAdditive();
 
 	public:
 		std::vector<VkPipelineShaderStageCreateInfo> m_shaderStages;

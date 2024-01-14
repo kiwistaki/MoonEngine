@@ -1,14 +1,17 @@
 #pragma once
 #include "RenderTypes.h"
+#include "Descriptor.h"
 
 #include <filesystem>
+#include <unordered_map>
 
 #include <glm/vec3.hpp>
-#include <glm/vec4.hpp>
-#include <glm/mat4x4.hpp>
 
 namespace Moon
 {
+	//Forward declaration
+	class RenderDevice;
+
 	struct Vertex
 	{
 		glm::vec3 position;
@@ -31,10 +34,16 @@ namespace Moon
 		VkDeviceAddress vertexBuffer;
 	};
 
+	struct GLTFMaterial
+	{
+		MaterialInstance data;
+	};
+
 	struct SubMesh
 	{
 		uint32_t startIndex;
 		uint32_t count;
+		std::shared_ptr<GLTFMaterial> material;
 	};
 
 	struct MeshAsset
@@ -44,8 +53,52 @@ namespace Moon
 		GPUMeshBuffers meshBuffers;
 	};
 
-	//Forward declaration
-	class RenderDevice;
-	std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(RenderDevice* device, std::filesystem::path filePath, bool useNormalAsColor = false);
+	struct RenderObject
+	{
+		uint32_t indexCount;
+		uint32_t firstIndex;
+		VkBuffer indexBuffer;
 
+		MaterialInstance* material;
+
+		glm::mat4 transform;
+		VkDeviceAddress vertexBufferAddress;
+	};
+
+	struct DrawContext
+	{
+		std::vector<RenderObject> OpaqueSurfaces;
+		std::vector<RenderObject> TransparentSurfaces;
+	};
+
+	struct MeshNode : public Node
+	{
+		std::shared_ptr<MeshAsset> mesh;
+
+		virtual void Draw(const glm::mat4& topMatrix, DrawContext& ctx);
+	};
+
+	struct LoadedGLTF : public IRenderable
+	{
+		std::unordered_map<std::string, std::shared_ptr<MeshAsset>> meshes;
+		std::unordered_map<std::string, std::shared_ptr<Node>> nodes;
+		std::unordered_map<std::string, AllocatedImage> images;
+		std::unordered_map<std::string, std::shared_ptr<GLTFMaterial>> materials;
+
+		std::vector<std::shared_ptr<Node>> topNodes;
+
+		std::vector<VkSampler> samplers;
+		DescriptorAllocator descriptorPool;
+		AllocatedBuffer materialDataBuffer;
+
+		RenderDevice* creator;
+
+		~LoadedGLTF() { clearAll(); };
+		virtual void Draw(const glm::mat4& topMatrix, DrawContext& ctx);
+
+	private:
+		void clearAll();
+	};
+
+	std::optional<std::shared_ptr<LoadedGLTF>> loadGltf(RenderDevice* engine, std::string_view filePath);
 }
