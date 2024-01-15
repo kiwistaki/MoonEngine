@@ -91,6 +91,14 @@ namespace Moon
 		MaterialInstance writeMaterial(VkDevice device, MaterialPass pass, const MaterialResources& resources, DescriptorAllocator& descriptorAllocator);
 	};
 
+	struct EngineStats
+	{
+		float frametime;
+		int triangleCount;
+		int drawcallCount;
+		float sceneUpdateTime;
+		float meshDrawTime;
+	};
 
 	class RenderDevice
 	{
@@ -99,7 +107,6 @@ namespace Moon
 		void cleanup();
 		void draw();
 		void drawImpl(VkCommandBuffer cmd);
-		void drawBackground(VkCommandBuffer cmd);
 		void drawMeshes(VkCommandBuffer cmd);
 		void drawImgui(VkCommandBuffer cmd, VkImageView targetImageView);
 		void run();
@@ -205,5 +212,6 @@ namespace Moon
 
 		Camera m_mainCamera;
 
+		EngineStats m_stats;
 	};
 }

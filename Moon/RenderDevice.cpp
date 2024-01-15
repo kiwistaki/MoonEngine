@@ -2,6 +2,7 @@
 
 #include <array>
 #include <fstream>
+#include <chrono>
 
 #define VK_USE_PLATFORM_WIN32_KHR
 #define VOLK_IMPLEMENTATION
@@ -156,6 +157,12 @@ namespace Moon
 
 	void RenderDevice::drawMeshes(VkCommandBuffer cmd)
 	{
+		//reset counters
+		m_stats.drawcallCount = 0;
+		m_stats.triangleCount = 0;
+		//begin clock
+		auto start = std::chrono::system_clock::now();
+
 		VkClearValue clearValue{ .color = VkClearColorValue {0.1f, 0.1f, 0.1f, 1.0f} };
 		VkRenderingAttachmentInfo colorAttachment = Moon::attachmentInfo(m_drawImage.imageView, &clearValue, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);//VK_IMAGE_LAYOUT_GENERAL?
 		VkRenderingAttachmentInfo depthAttachment = Moon::depthAttachmentInfo(m_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
@@ -206,6 +213,9 @@ namespace Moon
 					vkCmdPushConstants(cmd, draw.material->pipeline->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants), &pushConstants);
 
 					vkCmdDrawIndexed(cmd, draw.indexCount, 1, draw.firstIndex, 0, 0);
+
+					m_stats.drawcallCount++;
+					m_stats.triangleCount += draw.indexCount / 3;
 				};
 
 			for (auto& r : m_mainDrawContext.OpaqueSurfaces)
@@ -219,6 +229,10 @@ namespace Moon
 			}
 		}
 		vkCmdEndRendering(cmd);
+
+		auto end = std::chrono::system_clock::now();
+		auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+		m_stats.meshDrawTime = elapsed.count() / 1000.f;
 	}
 
 	void RenderDevice::drawImgui(VkCommandBuffer cmd, VkImageView targetImageView)
@@ -239,6 +253,9 @@ namespace Moon
 		//main loop
 		while (!bQuit)
 		{
+			//begin clock
+			auto start = std::chrono::system_clock::now();
+
 			//Handle events on queue
 			while (SDL_PollEvent(&e) != 0)
 			{		
@@ -258,12 +275,18 @@ namespace Moon
 
 			//some imgui UI to test
 			{
-				if(!ImGui::Begin("AppSettings"))
+				if(!ImGui::Begin("Stats"))
 				{
 					ImGui::End();
 				}
 				else
 				{
+					ImGui::Text("Frametime: %f ms", m_stats.frametime);
+					ImGui::Text("Draw time: %f ms", m_stats.meshDrawTime);
+					ImGui::Text("Update time: %f ms", m_stats.sceneUpdateTime);
+					ImGui::Text("Triangles: %i", m_stats.triangleCount);
+					ImGui::Text("Draws: %i", m_stats.drawcallCount);
+
 					ImGui::End();
 				}
 			}
@@ -272,6 +295,11 @@ namespace Moon
 			ImGui::Render();
 
 			draw();
+
+			//end clock
+			auto end = std::chrono::system_clock::now();
+			auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+			m_stats.frametime = elapsed.count() / 1000.0f;
 		}
 	}
 
@@ -366,6 +394,9 @@ namespace Moon
 
 	void RenderDevice::updateScene()
 	{
+		//start clock
+		auto start = std::chrono::system_clock::now();
+		
 		m_mainCamera.update();
 
 		m_mainDrawContext.OpaqueSurfaces.clear();
@@ -383,6 +414,11 @@ namespace Moon
 		m_sceneData.ambientColor = glm::vec4(.1f);
 		m_sceneData.sunlightColor = glm::vec4(1.f);
 		m_sceneData.sunlightDirection = glm::vec4(0, 1, 0.5, 1.f);
+
+		//end clock
+		auto end = std::chrono::system_clock::now();
+		auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+		m_stats.sceneUpdateTime = elapsed.count() / 1000.0f;
 	}
 
 	void RenderDevice::initVulkan()
@@ -391,7 +427,7 @@ namespace Moon
 
 		vkb::InstanceBuilder builder;
 		auto inst_ret = builder.set_app_name("Moon Engine")
-			.request_validation_layers(true)
+			.request_validation_layers(false)
 			.require_api_version(1, 3, 0)
 			.use_default_debug_messenger()
 			.build();
