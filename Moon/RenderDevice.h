@@ -184,9 +184,6 @@ namespace Moon
 		std::vector<VkImageView> m_swapchainImageViews;
 
 		DescriptorAllocator m_globalDescriptorAllocator;
-		VkDescriptorSetLayout m_drawImageDescriptorLayout;
-		VkDescriptorSet m_drawImageDescriptorSet;
-
 		VkDescriptorSetLayout m_globalSetLayout;
 		VkDescriptorSetLayout m_objectSetLayout;
 

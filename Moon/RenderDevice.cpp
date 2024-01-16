@@ -25,6 +25,8 @@
 
 #include <glm/gtx/transform.hpp>
 
+static bool g_useValidationLayer = true;
+
 namespace Moon
 {
 	void RenderDevice::init()
@@ -427,7 +429,7 @@ namespace Moon
 
 		vkb::InstanceBuilder builder;
 		auto inst_ret = builder.set_app_name("Moon Engine")
-			.request_validation_layers(false)
+			.request_validation_layers(g_useValidationLayer)
 			.require_api_version(1, 3, 0)
 			.use_default_debug_messenger()
 			.build();
@@ -614,29 +616,6 @@ namespace Moon
 				m_globalDescriptorAllocator.destroyPool(m_device);
 			});
 
-		// Descriptor Set Compute Color Gradient
-		{
-			DescriptorLayoutBuilder builder;
-			builder.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT);
-			m_drawImageDescriptorLayout = builder.build(m_device);
-			m_drawImageDescriptorSet = m_globalDescriptorAllocator.allocate(m_device, m_drawImageDescriptorLayout);
-			m_mainDeletionQueue.pushFunction([=]()
-				{
-					vkDestroyDescriptorSetLayout(m_device, m_drawImageDescriptorLayout, nullptr);
-				});
-
-			VkSampler blockySampler;
-			VkSamplerCreateInfo samplerInfo = samplerCreateInfo(VK_FILTER_NEAREST);
-			vkCreateSampler(m_device, &samplerInfo, nullptr, &blockySampler);
-			m_mainDeletionQueue.pushFunction([=]()
-				{
-					vkDestroySampler(m_device, blockySampler, nullptr);
-				});
-
-			DescriptorWriter writer;
-			writer.writeImage(0, m_drawImage.imageView, blockySampler, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-			writer.updateSet(m_device, m_drawImageDescriptorSet);
-		}
 		{
 			DescriptorLayoutBuilder builder;
 			builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);

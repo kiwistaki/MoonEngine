@@ -250,7 +250,7 @@ namespace Moon
 			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3 },
 			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1 }
 		};
-		file.descriptorPool.initPool(engine->getDevice(), gltf.materials.size(), sizes);
+		file.descriptorPool.initPool(engine->getDevice(), static_cast<uint32_t>(gltf.materials.size()), sizes);
 
 		// load samplers
 		for (fastgltf::Sampler& sampler : gltf.samplers)
@@ -372,7 +372,7 @@ namespace Moon
 
 					fastgltf::iterateAccessor<std::uint32_t>(gltf, indexaccessor, [&](std::uint32_t idx)
 						{
-							indices.push_back(idx + initial_vtx);
+							indices.push_back(idx + (uint32_t)initial_vtx);
 						});
 				}
 
