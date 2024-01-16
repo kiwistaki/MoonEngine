@@ -39,10 +39,18 @@ namespace Moon
 		MaterialInstance data;
 	};
 
+	struct Bounds
+	{
+		glm::vec3 origin;
+		float sphereRadius;
+		glm::vec3 extents;
+	};
+
 	struct SubMesh
 	{
 		uint32_t startIndex;
 		uint32_t count;
+		Bounds bounds;
 		std::shared_ptr<GLTFMaterial> material;
 	};
 
@@ -60,7 +68,7 @@ namespace Moon
 		VkBuffer indexBuffer;
 
 		MaterialInstance* material;
-
+		Bounds bounds;
 		glm::mat4 transform;
 		VkDeviceAddress vertexBufferAddress;
 	};

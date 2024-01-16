@@ -30,6 +30,50 @@ static bool g_useValidationLayer = true;
 
 namespace Moon
 {
+	bool isVisible(const RenderObject& obj, const glm::mat4& viewProj)
+	{
+		std::array<glm::vec3, 8> corners
+		{
+		   glm::vec3 { 1, 1, 1 },
+		   glm::vec3 { 1, 1, -1 },
+		   glm::vec3 { 1, -1, 1 },
+		   glm::vec3 { 1, -1, -1 },
+		   glm::vec3 { -1, 1, 1 },
+		   glm::vec3 { -1, 1, -1 },
+		   glm::vec3 { -1, -1, 1 },
+		   glm::vec3 { -1, -1, -1 },
+		};
+
+		glm::mat4 matrix = viewProj * obj.transform;
+
+		glm::vec3 min = { 1.5, 1.5, 1.5 };
+		glm::vec3 max = { -1.5, -1.5, -1.5 };
+
+		for (int c = 0; c < 8; c++)
+		{
+			// project each corner into clip space
+			glm::vec4 v = matrix * glm::vec4(obj.bounds.origin + (corners[c] * obj.bounds.extents), 1.f);
+
+			// perspective correction
+			v.x = v.x / v.w;
+			v.y = v.y / v.w;
+			v.z = v.z / v.w;
+
+			min = glm::min(glm::vec3{ v.x, v.y, v.z }, min);
+			max = glm::max(glm::vec3{ v.x, v.y, v.z }, max);
+		}
+
+		// check the clip space box is within the view
+		if (min.z > 1.f || max.z < 0.f || min.x > 1.f || max.x < -1.f || min.y > 1.f || max.y < -1.f)
+		{
+			return false;
+		}
+		else
+		{
+			return true;
+		}
+	}
+
 	void RenderDevice::init()
 	{
 		// Initialize SDL 
@@ -166,11 +210,16 @@ namespace Moon
 		//begin clock
 		auto start = std::chrono::system_clock::now();
 
-		//sort opaque draw objects per pipeline, access only by index
+		//sort opaque draw objects per pipeline, access only by index and frustum culled
 		std::vector<uint32_t> opaqueDraws;
 		opaqueDraws.reserve(m_mainDrawContext.OpaqueSurfaces.size());
 		for (uint32_t i = 0; i < m_mainDrawContext.OpaqueSurfaces.size(); i++)
-			opaqueDraws.push_back(i);
+		{
+			if (isVisible(m_mainDrawContext.OpaqueSurfaces[i], m_sceneData.viewproj))
+			{
+				opaqueDraws.push_back(i);
+			}
+		}
 		std::sort(opaqueDraws.begin(), opaqueDraws.end(), [&](const auto& iA, const auto& iB) {
 			const RenderObject& A = m_mainDrawContext.OpaqueSurfaces[iA];
 			const RenderObject& B = m_mainDrawContext.OpaqueSurfaces[iB];
@@ -183,6 +232,17 @@ namespace Moon
 				return A.material < B.material;
 			}
 		});
+
+		//frustum cull transparent objects
+		std::vector<uint32_t> transparentDraws;
+		transparentDraws.reserve(m_mainDrawContext.TransparentSurfaces.size());
+		for (uint32_t i = 0; i < m_mainDrawContext.TransparentSurfaces.size(); i++)
+		{
+			if (isVisible(m_mainDrawContext.TransparentSurfaces[i], m_sceneData.viewproj))
+			{
+				transparentDraws.push_back(i);
+			}
+		}
 
 		VkClearValue clearValue{ .color = VkClearColorValue {0.1f, 0.1f, 0.1f, 1.0f} };
 		VkRenderingAttachmentInfo colorAttachment = Moon::attachmentInfo(m_drawImage.imageView, &clearValue, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);//VK_IMAGE_LAYOUT_GENERAL?
@@ -262,9 +322,9 @@ namespace Moon
 				draw(m_mainDrawContext.OpaqueSurfaces[r]);
 			}
 
-			for (auto& r : m_mainDrawContext.TransparentSurfaces)
+			for (auto& r : transparentDraws)
 			{
-				draw(r);
+				draw(m_mainDrawContext.TransparentSurfaces[r]);
 			}
 		}
 		vkCmdEndRendering(cmd);

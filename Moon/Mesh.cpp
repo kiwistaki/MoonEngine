@@ -26,7 +26,7 @@ namespace Moon
 			def.firstIndex = s.startIndex;
 			def.indexBuffer = mesh->meshBuffers.indexBuffer.buffer;
 			def.material = &s.material->data;
-
+			def.bounds = s.bounds;
 			def.transform = nodeMatrix;
 			def.vertexBufferAddress = mesh->meshBuffers.vertexBufferAddress;
 
@@ -432,6 +432,18 @@ namespace Moon
 				{
 					subMesh.material = materials[0];
 				}
+
+				//calculate bounds
+				glm::vec3 minpos = vertices[initial_vtx].position;
+				glm::vec3 maxpos = vertices[initial_vtx].position;
+				for (int i = initial_vtx; i < vertices.size(); i++)
+				{
+					minpos = glm::min(minpos, vertices[i].position);
+					maxpos = glm::max(maxpos, vertices[i].position);
+				}
+				subMesh.bounds.origin = (maxpos + minpos) / 2.f;
+				subMesh.bounds.extents = (maxpos - minpos) / 2.f;
+				subMesh.bounds.sphereRadius = glm::length(subMesh.bounds.extents);
 
 				newmesh->surfaces.push_back(subMesh);
 			}
