@@ -1,5 +1,6 @@
 ﻿#include "RenderDevice.h"
 
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <chrono>
@@ -165,6 +166,24 @@ namespace Moon
 		//begin clock
 		auto start = std::chrono::system_clock::now();
 
+		//sort opaque draw objects per pipeline, access only by index
+		std::vector<uint32_t> opaqueDraws;
+		opaqueDraws.reserve(m_mainDrawContext.OpaqueSurfaces.size());
+		for (uint32_t i = 0; i < m_mainDrawContext.OpaqueSurfaces.size(); i++)
+			opaqueDraws.push_back(i);
+		std::sort(opaqueDraws.begin(), opaqueDraws.end(), [&](const auto& iA, const auto& iB) {
+			const RenderObject& A = m_mainDrawContext.OpaqueSurfaces[iA];
+			const RenderObject& B = m_mainDrawContext.OpaqueSurfaces[iB];
+			if (A.material == B.material)
+			{
+				return A.indexBuffer < B.indexBuffer;
+			}
+			else
+			{
+				return A.material < B.material;
+			}
+		});
+
 		VkClearValue clearValue{ .color = VkClearColorValue {0.1f, 0.1f, 0.1f, 1.0f} };
 		VkRenderingAttachmentInfo colorAttachment = Moon::attachmentInfo(m_drawImage.imageView, &clearValue, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);//VK_IMAGE_LAYOUT_GENERAL?
 		VkRenderingAttachmentInfo depthAttachment = Moon::depthAttachmentInfo(m_depthImage.imageView, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
@@ -201,13 +220,31 @@ namespace Moon
 			writer.writeBuffer(0, gpuSceneDataBuffer.buffer, sizeof(GPUSceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
 			writer.updateSet(m_device, globalDescriptor);
 
+			MaterialPipeline* lastPipeline = nullptr;
+			MaterialInstance* lastMaterial = nullptr;
+			VkBuffer lastIndexBuffer = VK_NULL_HANDLE;
+
 			auto draw = [&](const RenderObject& draw)
 				{
-					vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->pipeline);
-					vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->layout, 0, 1, &globalDescriptor, 0, nullptr);
-					vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->layout, 1, 1, &draw.material->materialSet, 0, nullptr);
+					if (lastMaterial != draw.material)
+					{
+						lastMaterial = draw.material;
 
-					vkCmdBindIndexBuffer(cmd, draw.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+						if (lastPipeline != draw.material->pipeline)
+						{
+							lastPipeline = draw.material->pipeline;
+							vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->pipeline);
+							vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->layout, 0, 1, &globalDescriptor, 0, nullptr);
+						}
+
+						vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->layout, 1, 1, &draw.material->materialSet, 0, nullptr);
+					}
+
+					if (lastIndexBuffer != draw.indexBuffer)
+					{
+						lastIndexBuffer = draw.indexBuffer;
+						vkCmdBindIndexBuffer(cmd, draw.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+					}
 
 					GPUDrawPushConstants pushConstants;
 					pushConstants.vertexBuffer = draw.vertexBufferAddress;
@@ -220,9 +257,9 @@ namespace Moon
 					m_stats.triangleCount += draw.indexCount / 3;
 				};
 
-			for (auto& r : m_mainDrawContext.OpaqueSurfaces)
+			for (auto& r : opaqueDraws)
 			{
-				draw(r);
+				draw(m_mainDrawContext.OpaqueSurfaces[r]);
 			}
 
 			for (auto& r : m_mainDrawContext.TransparentSurfaces)
