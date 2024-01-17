@@ -22,19 +22,21 @@ namespace Moon
 	{
 		if (e.type == SDL_KEYDOWN)
 		{
-			if (e.key.keysym.sym == SDLK_w) { velocity.z = -1; }
-			if (e.key.keysym.sym == SDLK_s) { velocity.z = 1; }
-			if (e.key.keysym.sym == SDLK_a) { velocity.x = -1; }
-			if (e.key.keysym.sym == SDLK_d) { velocity.x = 1; }
+			if (e.key.keysym.sym == SDLK_w) { velocity.z = -1.f * velocityBoost; }
+			if (e.key.keysym.sym == SDLK_s) { velocity.z =  1.f * velocityBoost; }
+			if (e.key.keysym.sym == SDLK_a) { velocity.x = -1.f * velocityBoost; }
+			if (e.key.keysym.sym == SDLK_d) { velocity.x =  1.f * velocityBoost; }
+			if (e.key.keysym.sym == SDLK_LSHIFT) { velocityBoost = 5.f; }
 		}
 
 		if (e.type == SDL_KEYUP)
 		{
-			if (e.key.keysym.sym == SDLK_w) { velocity.z = 0; }
-			if (e.key.keysym.sym == SDLK_s) { velocity.z = 0; }
-			if (e.key.keysym.sym == SDLK_a) { velocity.x = 0; }
-			if (e.key.keysym.sym == SDLK_d) { velocity.x = 0; }
-		}
+			if (e.key.keysym.sym == SDLK_LSHIFT) { velocityBoost = 1.f; }
+			if (e.key.keysym.sym == SDLK_w) { velocity.z = 0.f; }
+			if (e.key.keysym.sym == SDLK_s) { velocity.z = 0.f; }
+			if (e.key.keysym.sym == SDLK_a) { velocity.x = 0.f; }
+			if (e.key.keysym.sym == SDLK_d) { velocity.x = 0.f; }
+		}	
 		
 		if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT)
 		{

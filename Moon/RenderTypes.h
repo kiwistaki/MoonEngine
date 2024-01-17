@@ -43,6 +43,7 @@ namespace Moon
         VkExtent3D imageExtent;
         VkFormat imageFormat;
         VmaAllocation allocation;
+        std::string name;
     };
 
 	struct GPUSceneData

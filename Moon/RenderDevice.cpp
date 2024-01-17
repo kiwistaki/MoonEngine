@@ -385,7 +385,19 @@ namespace Moon
 					ImGui::Text("Update time: %f ms", m_stats.sceneUpdateTime);
 					ImGui::Text("Triangles: %i", m_stats.triangleCount);
 					ImGui::Text("Draws: %i", m_stats.drawcallCount);
+					ImGui::End();
+				}
 
+				if (!ImGui::Begin("Camera"))
+				{
+					ImGui::End();
+				}
+				else
+				{
+					ImGui::Text("Position: %f %f %f ", m_mainCamera.position.x, m_mainCamera.position.y, m_mainCamera.position.z);
+					ImGui::Text("Velocity: %f %f %f ", m_mainCamera.velocity.x, m_mainCamera.velocity.y, m_mainCamera.velocity.z);
+					ImGui::Text("Pitch: %f", m_mainCamera.pitch);
+					ImGui::Text("Yaw: %f", m_mainCamera.yaw);
 					ImGui::End();
 				}
 			}

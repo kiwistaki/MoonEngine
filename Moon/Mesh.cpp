@@ -9,6 +9,7 @@
 #include <glm/gtx/quaternion.hpp>
 
 #include <iostream>
+#include <filesystem>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -109,7 +110,7 @@ namespace Moon
 		}
 	}
 
-	std::optional<AllocatedImage> loadImage(RenderDevice* engine, fastgltf::Asset& asset, fastgltf::Image& image)
+	std::optional<AllocatedImage> loadImage(RenderDevice* engine, fastgltf::Asset& asset, fastgltf::Image& image, std::string globalPath = "")
 	{
 		AllocatedImage newImage{};
 		int width, height, nrChannels;
@@ -124,7 +125,8 @@ namespace Moon
 					assert(filePath.uri.isLocalPath());
 
 					const std::string path(filePath.uri.path().begin(), filePath.uri.path().end());
-					unsigned char* data = stbi_load(path.c_str(), &width, &height, &nrChannels, 4);
+					globalPath += path;
+					unsigned char* data = stbi_load(globalPath.c_str(), &width, &height, &nrChannels, 4);
 					if (data)
 					{
 						VkExtent3D imagesize;
@@ -133,6 +135,7 @@ namespace Moon
 						imagesize.depth = 1;
 
 						newImage = engine->createImage(data, imagesize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT);
+						newImage.name = path;
 
 						stbi_image_free(data);
 					}
@@ -149,6 +152,7 @@ namespace Moon
 						imagesize.depth = 1;
 
 						newImage = engine->createImage(data, imagesize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT);
+						newImage.name = image.name.c_str();
 
 						stbi_image_free(data);
 					}
@@ -174,6 +178,7 @@ namespace Moon
 									imagesize.depth = 1;
 
 									newImage = engine->createImage(data, imagesize, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT);
+									newImage.name = image.name.c_str();
 
 									stbi_image_free(data);
 								}
@@ -271,12 +276,14 @@ namespace Moon
 		// load textures
 		for (fastgltf::Image& image : gltf.images)
 		{
-			std::optional<AllocatedImage> img = loadImage(engine, gltf, image);
+			std::filesystem::path fullpath(filePath);
+			fullpath.remove_filename();
+			std::optional<AllocatedImage> img = loadImage(engine, gltf, image, fullpath.string());
 
 			if (img.has_value())
 			{
 				images.push_back(*img);
-				file.images[image.name.c_str()] = *img;
+				file.images[img->name] = *img;
 			}
 			else
 			{
@@ -436,7 +443,7 @@ namespace Moon
 				//calculate bounds
 				glm::vec3 minpos = vertices[initial_vtx].position;
 				glm::vec3 maxpos = vertices[initial_vtx].position;
-				for (int i = initial_vtx; i < vertices.size(); i++)
+				for (size_t i = initial_vtx; i < vertices.size(); i++)
 				{
 					minpos = glm::min(minpos, vertices[i].position);
 					maxpos = glm::max(maxpos, vertices[i].position);

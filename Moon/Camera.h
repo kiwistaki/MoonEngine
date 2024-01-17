@@ -19,6 +19,7 @@ namespace Moon
 		glm::vec3 position;
 		float pitch{ 0.f };
 		float yaw{ 0.f };
+		float velocityBoost{ 1.0f };
 
 		bool processMouseMotion = false;
 	};
