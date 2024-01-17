@@ -28,6 +28,25 @@
 
 static bool g_useValidationLayer = true;
 
+class Timer {
+public:
+	Timer(float* input)
+		:output(input)
+	{
+		start = std::chrono::system_clock::now();
+	}
+	~Timer()
+	{
+		end = std::chrono::system_clock::now();
+		auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+		*output = elapsed.count() / 1000.f;
+	}
+private:
+	std::chrono::system_clock::time_point start, end;
+	float* output;
+};
+#define CPU_TIMER(X) Timer timer(X);
+
 namespace Moon
 {
 	bool isVisible(const RenderObject& obj, const glm::mat4& viewProj)
@@ -99,9 +118,9 @@ namespace Moon
 		initDefaultData();
 
 		m_mainCamera.velocity = glm::vec3(0.f);
-		m_mainCamera.position = glm::vec3(30.f, 0.f, -85.f);
+		m_mainCamera.position = /*glm::vec3(30.f, 0.f, -85.f) */ glm::vec3(10.f, 1.f, 0.f);
 		m_mainCamera.pitch = 0;
-		m_mainCamera.yaw = 0;
+		m_mainCamera.yaw = /*0*/ 4.675f;
 
 		//everything went fine
 		m_isInitialized = true;
@@ -204,11 +223,10 @@ namespace Moon
 
 	void RenderDevice::drawMeshes(VkCommandBuffer cmd)
 	{
+		CPU_TIMER(&m_stats.meshDrawTime);
 		//reset counters
 		m_stats.drawcallCount = 0;
 		m_stats.triangleCount = 0;
-		//begin clock
-		auto start = std::chrono::system_clock::now();
 
 		//sort opaque draw objects per pipeline, access only by index and frustum culled
 		std::vector<uint32_t> opaqueDraws;
@@ -328,10 +346,6 @@ namespace Moon
 			}
 		}
 		vkCmdEndRendering(cmd);
-
-		auto end = std::chrono::system_clock::now();
-		auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-		m_stats.meshDrawTime = elapsed.count() / 1000.f;
 	}
 
 	void RenderDevice::drawImgui(VkCommandBuffer cmd, VkImageView targetImageView)
@@ -352,8 +366,7 @@ namespace Moon
 		//main loop
 		while (!bQuit)
 		{
-			//begin clock
-			auto start = std::chrono::system_clock::now();
+			CPU_TIMER(&m_stats.frametime);
 
 			//Handle events on queue
 			while (SDL_PollEvent(&e) != 0)
@@ -380,9 +393,10 @@ namespace Moon
 				}
 				else
 				{
-					ImGui::Text("Frametime: %f ms", m_stats.frametime);
-					ImGui::Text("Draw time: %f ms", m_stats.meshDrawTime);
-					ImGui::Text("Update time: %f ms", m_stats.sceneUpdateTime);
+					ImGui::Text("Frametime: %.3f ms", m_stats.frametime);
+					ImGui::Text("Draw time: %.3f ms", m_stats.meshDrawTime);
+					ImGui::Text("Update time: %.3f ms", m_stats.sceneUpdateTime);
+					ImGui::Text("Asset load time: %.3f s", m_stats.assetLoadTime/1000.f);
 					ImGui::Text("Triangles: %i", m_stats.triangleCount);
 					ImGui::Text("Draws: %i", m_stats.drawcallCount);
 					ImGui::End();
@@ -394,10 +408,10 @@ namespace Moon
 				}
 				else
 				{
-					ImGui::Text("Position: %f %f %f ", m_mainCamera.position.x, m_mainCamera.position.y, m_mainCamera.position.z);
-					ImGui::Text("Velocity: %f %f %f ", m_mainCamera.velocity.x, m_mainCamera.velocity.y, m_mainCamera.velocity.z);
-					ImGui::Text("Pitch: %f", m_mainCamera.pitch);
-					ImGui::Text("Yaw: %f", m_mainCamera.yaw);
+					ImGui::Text("Position: %.3f %.3f %.3f ", m_mainCamera.position.x, m_mainCamera.position.y, m_mainCamera.position.z);
+					ImGui::Text("Velocity: %.3f %.3f %.3f ", m_mainCamera.velocity.x, m_mainCamera.velocity.y, m_mainCamera.velocity.z);
+					ImGui::Text("Pitch: %.3f", m_mainCamera.pitch);
+					ImGui::Text("Yaw: %.3f", m_mainCamera.yaw);
 					ImGui::End();
 				}
 			}
@@ -406,11 +420,6 @@ namespace Moon
 			ImGui::Render();
 
 			draw();
-
-			//end clock
-			auto end = std::chrono::system_clock::now();
-			auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-			m_stats.frametime = elapsed.count() / 1000.0f;
 		}
 	}
 
@@ -505,14 +514,15 @@ namespace Moon
 
 	void RenderDevice::updateScene()
 	{
-		//start clock
-		auto start = std::chrono::system_clock::now();
+		CPU_TIMER(&m_stats.sceneUpdateTime);
 		
 		m_mainCamera.update();
 
 		m_mainDrawContext.OpaqueSurfaces.clear();
 		m_mainDrawContext.TransparentSurfaces.clear();
 		m_loadedScenes["structure"]->Draw(glm::mat4{ 1.f }, m_mainDrawContext);
+		//m_loadedScenes["Sponza"]->Draw(glm::mat4{ 1.f }, m_mainDrawContext);
+		//m_loadedScenes["SponzaCurtains"]->Draw(glm::mat4{ 1.f }, m_mainDrawContext);
 
 		glm::mat4 view = m_mainCamera.getViewMatrix();
 		glm::mat4 projection = glm::perspective(glm::radians(70.f), (float)m_windowExtent.width / (float)m_windowExtent.height, 10000.f, 0.1f);
@@ -525,11 +535,6 @@ namespace Moon
 		m_sceneData.ambientColor = glm::vec4(.1f);
 		m_sceneData.sunlightColor = glm::vec4(1.f);
 		m_sceneData.sunlightDirection = glm::vec4(0, 1, 0.5, 1.f);
-
-		//end clock
-		auto end = std::chrono::system_clock::now();
-		auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-		m_stats.sceneUpdateTime = elapsed.count() / 1000.0f;
 	}
 
 	void RenderDevice::initVulkan()
@@ -822,6 +827,8 @@ namespace Moon
 
 	void RenderDevice::initDefaultData()
 	{
+		CPU_TIMER(&m_stats.assetLoadTime);
+
 		// Default textures and samplers
 		uint32_t white = 0xFFFFFFFF;
 		m_whiteImage = createImage((void*)&white, VkExtent3D{ 1, 1, 1 }, VK_FORMAT_R8G8B8A8_UNORM,
@@ -889,11 +896,20 @@ namespace Moon
 
 		m_defaultData = m_metalRoughMaterial.writeMaterial(m_device, MaterialPass::MainColor, materialResources, m_globalDescriptorAllocator);
 
-
-		std::string structurePath = { "..\\..\\Assets\\structure.glb" };
+		std::string structurePath = {"..\\..\\Assets\\structure.glb"};
 		auto structureFile = loadGltf(this, structurePath);
 		assert(structureFile.has_value());
 		m_loadedScenes["structure"] = *structureFile;
+		
+		//std::string sponzaPath = {"..\\..\\Assets\\main_sponza\\Main.1_Sponza\\NewSponza_Main_glTF_002.gltf"};
+		//auto sponzaFile = loadGltf(this, sponzaPath);
+		//assert(sponzaFile.has_value());
+		//m_loadedScenes["Sponza"] = *sponzaFile;
+
+		//std::string sponzaCurtainsPath = {"..\\..\\Assets\\main_sponza\\PKG_A_Curtains\\NewSponza_Curtains_glTF.gltf"};
+		//auto sponzaCurtainsFile = loadGltf(this, sponzaCurtainsPath);
+		//assert(sponzaCurtainsFile.has_value());
+		//m_loadedScenes["SponzaCurtains"] = *sponzaCurtainsFile;
 	}
 
 	FrameData& RenderDevice::getCurrentFrame()

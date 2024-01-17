@@ -98,6 +98,7 @@ namespace Moon
 		int drawcallCount;
 		float sceneUpdateTime;
 		float meshDrawTime;
+		float assetLoadTime;
 	};
 
 	class RenderDevice
